@@ -1,75 +1,42 @@
-# Vanity Plate Poetry
+# Vanity Plate Poetry (local prototype)
 
-Approved members upload photos of vanity license plates. An AI finds the plate in each photo, reads it,
-and works out what it means. Once a day the AI writes a poem from at least 5 plates, and the home page
-shows it along with each plate and the member who uploaded it.
+A bare-bones version that runs entirely on one Windows PC, to prove the AI steps work before building the full site.
 
-## How it fits together
+1. **Read:** a vision model (Qwen3-VL) reads the text off each plate photo.
+2. **Decode:** a writing model (Gemma 3) works out what each plate says in plain words (LIV2FSH = "live to fish").
+3. **Write:** Gemma picks at least 5 plates and puts them in order so the plates themselves, shown one after
+   another, read as a poem or sentence. It can't add any words of its own, like magnetic poetry.
 
-- **The website** runs on [Vercel](https://vercel.com) (free "Hobby" plan) and keeps everything, including
-  the photos, in a [Neon](https://neon.com) Postgres database (free tier, about 0.5 GB, roughly 1,500 photos).
-- **The AI** runs on your own PC with [Ollama](https://ollama.com). A small helper program (`worker/`) checks
-  the website every minute for new photos, reads them, and writes the daily poem. Nothing gets read or
-  written while your PC or the helper is off; it all catches up when they're back on.
-- Optionally, set `LLM_MODE=claude` to have the website use the Claude API instead, so it works without your PC
-  (this costs a little per plate and per poem).
-
-### How a photo is checked
-
-1. The photo is shrunk in the browser, then again on the server (max 1568 px).
-2. **Find:** the AI looks at the whole photo, says where the plate is, and takes a first read. No plate means rejected.
-3. **Crop:** the site cuts the plate out (with a margin) and enlarges it.
-4. **Read again:** the AI reads only the cropped plate, says if it's legible and how confident it is, and explains the meaning.
-5. **Accept** only if it's legible, not low-confidence, both reads agree (one character of slack when confidence
-   is high), and there's a meaning. Otherwise the uploader sees why it was rejected.
-
-Admins see the cropped plate for every photo on the Admin page.
+The page shows the result as the plate photos in order, with a slideshow.
 
 ## Setup
 
-### 1. Put the website online
+1. Install [Ollama](https://ollama.com), then download the two models (about 14 GB):
 
-1. Create a free account at [vercel.com](https://vercel.com) using "Continue with GitHub".
-2. Click **Add New → Project**, pick the `vanity-plate-poetry` repository, and click **Deploy**.
-   The site won't work until the next steps are done.
-3. In the project, open **Storage → Create Database → Neon** and connect it. This sets `DATABASE_URL` for you.
-4. Open **Settings → Environment Variables** and add:
-   - `ADMIN_EMAIL`: the email you'll sign up with. That account becomes the admin automatically.
-   - `WORKER_SECRET`: a long random password (for example from a password manager). The PC helper uses it.
-   - `SITE_TIMEZONE`: your time zone, for example `America/Chicago` (optional, defaults to New York).
-5. Go to **Deployments**, open the latest one, and click **Redeploy**.
-6. Visit your site, click **Sign up**, and use the `ADMIN_EMAIL` address. New members who sign up show up
-   on the **Admin** page for you to approve.
-
-### 2. Run the AI on your PC
-
-1. Install [Ollama](https://ollama.com/download) and [Node.js](https://nodejs.org) (the "LTS" version).
-2. Open a terminal (Command Prompt) and download the two models (about 15 GB total, one time):
    ```
-   ollama pull qwen2.5vl:7b
+   ollama pull qwen3-vl:8b-instruct
    ollama pull gemma3:12b
    ```
-   `qwen2.5vl` reads the plates; `gemma3` writes the poems. Both fit on a 16 GB graphics card.
-3. Copy the `worker` folder from this repository to your PC.
-4. In that folder, copy `config.example.json` to `config.json` and fill in your site's address and the same
-   `WORKER_SECRET` you set in Vercel.
-5. Double-click `start-worker.bat` (or run `node worker.mjs`). Leave the window open; it logs each plate and poem.
 
-You can switch models by editing `visionModel` and `poemModel` in `config.json` (any Ollama model with vision
-support works for plates).
+   Use the `-instruct` Qwen. The plain `qwen3-vl:8b` "thinks" first, ignores the setting that turns that
+   off, and runs out of room before it answers.
+2. Put your plate photos (`.jpg`, `.png`, `.webp`) in this folder, next to `index.html`. The photos aren't
+   in the repo.
+3. Double-click **Start Plate Poems.bat**. It starts a tiny local web server (`server.ps1`) at
+   http://localhost:8765 and opens the page.
+4. Press **1. Read plates**, check the readings (you can type over any of them), then press **2. Write**.
 
-### Optional: use Claude instead of your PC
+Readings are saved to `plates.json`, so photos are only read once. Tested on an RTX 5080 (16 GB), where reading takes about a second per plate.
 
-In Vercel, set `LLM_MODE=claude`, add `ANTHROPIC_API_KEY` (from [console.anthropic.com](https://console.anthropic.com))
-and `CRON_SECRET` (any long random string), then redeploy. Plates are then checked the moment they're uploaded,
-and Vercel triggers the poem every day at 12:00 UTC (see `vercel.json`).
+## Why a server?
 
-## Running it locally (for developers)
+Ollama refuses requests from a page opened straight from disk (`file://`), but allows `localhost`.
+`server.ps1` serves this folder, lists the photos at `/api/images`, and saves `plates.json` at `/api/save`.
+It only needs the PowerShell that comes with Windows.
 
-```
-cp .env.example .env.local   # point DATABASE_URL at a local Postgres
-npm install
-npm run dev
-```
+## Known issues
 
-Tables are created automatically on first use.
+- Poems are mostly word salad so far ("Welcome / Death Corp / Fear God / Omg Late / Positive / Pie Life").
+  More plates and a stronger writer model should help.
+- Some decoded meanings are wrong. Fix them in the second box under each photo.
+- The "sentence" option needs work.

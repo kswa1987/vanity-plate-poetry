@@ -1,7 +1,7 @@
-node_modules
-.next
-.env
-.env*.local
-*.tsbuildinfo
-next-env.d.ts
-.vercel
+# Plate photos and their readings stay on your own PC.
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.gif
+plates.json

@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plate Poems</title>
+<style>
+  :root { --bg:#14161a; --panel:#1e2127; --line:#30343c; --text:#eceef2; --muted:#9aa1ad; --accent:#f2c14e; --bad:#e5686b; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui, sans-serif; }
+  header { padding:16px 20px; border-bottom:1px solid var(--line); display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+  h1 { margin:0 16px 0 0; font-size:20px; }
+  main { padding:20px; max-width:1200px; margin:auto; }
+  button { background:var(--accent); color:#111; border:0; border-radius:6px; padding:8px 14px; font-weight:600; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--text); border:1px solid var(--line); }
+  button:disabled { opacity:.5; cursor:default; }
+  input, select { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font:inherit; }
+  label { color:var(--muted); font-size:13px; }
+  #status { color:var(--muted); margin:0 0 16px; min-height:1.5em; }
+  #status.err { color:var(--bad); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:12px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .card.busy { outline:2px solid var(--accent); }
+  .card img { width:100%; aspect-ratio:4/3; object-fit:cover; display:block; }
+  .card .info { padding:6px 8px; }
+  .card input { width:100%; font-family:ui-monospace, monospace; font-weight:700; letter-spacing:1px; }
+  .card .meta { color:var(--muted); font-size:12px; margin-top:2px; }
+  section { margin-bottom:32px; }
+  h2 { font-size:16px; margin:0 0 12px; }
+  #show { display:none; }
+  .slide { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; text-align:center; }
+  .slide img { max-width:100%; max-height:55vh; border-radius:6px; }
+  .slide .plate { font:700 28px ui-monospace, monospace; letter-spacing:3px; color:var(--accent); margin-top:10px; }
+  .slide .reads { color:var(--muted); }
+  .slide .reads { font-size:24px; font-style:italic; color:var(--text); }
+  .poem { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; }
+  .pline { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px; }
+  .pword { width:170px; text-align:center; cursor:pointer; }
+  .pword img { width:100%; aspect-ratio:4/3; object-fit:cover; border-radius:6px; display:block; }
+  .pword.on img { outline:3px solid var(--accent); }
+  .pword .p { font:700 14px ui-monospace, monospace; color:var(--accent); margin-top:4px; }
+  .pword .r { font-size:15px; }
+  .ptext { color:var(--muted); font-style:italic; margin-top:4px; white-space:pre-wrap; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Plate Poems</h1>
+  <label>Reader <input id="readerModel" value="qwen3-vl:8b-instruct" size="18"></label>
+  <label>Writer <input id="writerModel" value="gemma3:12b" size="14"></label>
+  <label>Make a <select id="mode"><option value="poem">poem</option><option value="sentence">sentence</option></select></label>
+  <label>Plates to use <input id="count" type="number" min="5" max="15" value="6" style="width:60px"></label>
+</header>
+<main>
+  <p id="status">Loading…</p>
+
+  <section id="show">
+    <div class="row" style="justify-content:space-between">
+      <h2 id="title"></h2>
+      <div class="row">
+        <button class="ghost" id="prev">◀</button>
+        <button id="play">Play</button>
+        <button class="ghost" id="next">▶</button>
+      </div>
+    </div>
+    <div class="poem" id="poem"></div>
+    <div class="slide" id="slide" style="margin-top:16px"></div>
+  </section>
+
+  <section>
+    <div class="row" style="margin-bottom:12px">
+      <button id="readBtn">1. Read plates</button>
+      <button class="ghost" id="rereadBtn">Re-read all</button>
+      <button id="writeBtn">2. Write</button>
+      <span style="color:var(--muted);font-size:13px">You can fix any reading by typing in its box.</span>
+    </div>
+    <div class="grid" id="grid"></div>
+  </section>
+</main>
+
+<script>
+const OLLAMA = 'http://localhost:11434';
+const $ = id => document.getElementById(id);
+let images = [];          // file names
+let plates = {};          // file name -> { plate, state, confidence }
+let story = null;         // writer output, with file names attached
+let slideIdx = 0, timer = null;
+
+function status(msg, err) { $('status').textContent = msg; $('status').className = err ? 'err' : ''; }
+
+async function save() {
+  await fetch('/api/save', { method:'POST', body: JSON.stringify(plates, null, 2) });
+}
+
+async function init() {
+  images = await (await fetch('/api/images')).json();
+  try { plates = await (await fetch('/plates.json', { cache:'no-store' })).json(); } catch { plates = {}; }
+  renderGrid();
+  const done = images.filter(n => plates[n]).length;
+  status(`${images.length} photos found, ${done} already read.` + (done < images.length ? ' Press "Read plates" to start.' : ' Press "Write" to make something.'));
+  try { await fetch(OLLAMA + '/api/tags'); } catch { status('Cannot reach Ollama. Make sure the Ollama app is running.', true); }
+}
+
+function renderGrid() {
+  $('grid').innerHTML = '';
+  for (const name of images) {
+    const p = plates[name];
+    const card = document.createElement('div');
+    card.className = 'card'; card.id = 'card-' + name;
+    card.innerHTML = `<img loading="lazy" src="${encodeURI(name)}"><div class="info">
+      <input placeholder="${p ? '(no plate)' : 'not read yet'}">
+      <input class="reads" placeholder="what it says" style="font-family:inherit;font-weight:400;letter-spacing:0;margin-top:4px">
+      <div class="meta">${p ? [p.state, p.confidence].filter(Boolean).join(' · ') : name}</div></div>`;
+    card.querySelector('input').value = p ? p.plate : '';
+    card.querySelector('.reads').value = (p && p.reads) || '';
+    card.querySelector('.reads').onchange = e => {
+      if (!plates[name]) return;
+      plates[name].reads = e.target.value.trim() || undefined;
+      save();
+    };
+    card.querySelector('input').onchange = e => {
+      plates[name] = { ...(plates[name] || {}), plate: e.target.value.trim().toUpperCase(), confidence: 'edited', reads: undefined };
+      save();
+    };
+    $('grid').appendChild(card);
+  }
+}
+
+// Shrink a photo to a JPEG the vision model can handle quickly.
+function shrink(name, max = 1280) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const s = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * s); c.height = Math.round(img.naturalHeight * s);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      resolve(c.toDataURL('image/jpeg', 0.9).split(',')[1]);
+    };
+    img.onerror = reject;
+    img.src = encodeURI(name);
+  });
+}
+
+async function ollamaJSON(model, messages, schema, options) {
+  const r = await fetch(OLLAMA + '/api/chat', {
+    method:'POST',
+    body: JSON.stringify({ model, messages, format: schema, stream:false, options })
+  });
+  if (!r.ok) throw new Error(`${model}: ${(await r.text()).slice(0, 300)}`);
+  const data = await r.json();
+  return JSON.parse(data.message.content);
+}
+
+const plateSchema = {
+  type:'object',
+  properties: { plate:{type:'string'}, state:{type:'string'}, confidence:{type:'string', enum:['high','medium','low']} },
+  required:['plate','state','confidence']
+};
+
+async function readPlates(all) {
+  const todo = images.filter(n => all || !plates[n]);
+  if (!todo.length) return status('Every photo is already read. Use "Re-read all" to start over.');
+  setBusy(true);
+  let i = 0;
+  for (const name of todo) {
+    i++;
+    const card = $('card-' + name); card.classList.add('busy'); card.scrollIntoView({ block:'nearest' });
+    status(`Reading plate ${i} of ${todo.length} (${name})…  The first one is slow while the model loads.`);
+    try {
+      const img = await shrink(name);
+      plates[name] = await ollamaJSON($('readerModel').value, [{
+        role:'user',
+        content:'This photo shows a car license plate, probably a personalized vanity plate. ' +
+          'Read the large main characters of the plate exactly as written (letters, numbers, and any spaces or symbols that are part of it). ' +
+          'Ignore the state name, slogans, dealer frames, and registration stickers. ' +
+          'Also give the state or country if you can tell, otherwise an empty string. ' +
+          'If there is no readable plate, return an empty plate.',
+        images:[img]
+      }], plateSchema, { temperature:0 });
+      plates[name].plate = (plates[name].plate || '').trim().toUpperCase();
+      await save();
+    } catch (e) {
+      status(`Problem reading ${name}: ${e.message}`, true);
+      card.classList.remove('busy'); setBusy(false); renderGrid(); return;
+    }
+    card.classList.remove('busy');
+    const input = card.querySelector('input'); input.value = plates[name].plate;
+    card.querySelector('.meta').textContent = [plates[name].state, plates[name].confidence].filter(Boolean).join(' · ');
+  }
+  setBusy(false);
+  status(`Done. Read ${todo.length} plates. Check them over, then press "Write".`);
+}
+
+const decodeSchema = {
+  type:'object',
+  properties: { readings:{ type:'array', items:{ type:'object',
+    properties:{ plate:{type:'string'}, reads_as:{type:'string'} }, required:['plate','reads_as'] } } },
+  required:['readings']
+};
+
+// Step 2a: work out what each plate says in plain words, once, and remember it.
+async function decodePlates(pool) {
+  const todo = [...new Set(pool.filter(n => !plates[n].reads).map(n => plates[n].plate))];
+  if (!todo.length) return;
+  status(`Working out what ${todo.length} plates say…`);
+  const out = await ollamaJSON($('writerModel').value, [{
+    role:'user',
+    content:`Here are ${todo.length} personalized (vanity) license plates:\n${todo.join('\n')}\n\n` +
+      `Decode each one into the plain words it spells. Vanity plates squeeze words into 7 or 8 characters ` +
+      `(GR8 = great, 4 = for, U = you, 2 = to, ♥ = love or heart, missing vowels, and so on). ` +
+      `Give only the words the plate spells, nothing extra. If it is a name or you cannot tell, give your best guess. ` +
+      `Return "readings" with one entry for every one of the ${todo.length} plates, with "plate" copied exactly.`
+  }], decodeSchema, { temperature:0 });
+  if (!out.readings.length) throw new Error('The writer did not decode any plates. Try again.');
+  for (const r of out.readings) {
+    const key = r.plate.trim().toUpperCase();
+    pool.filter(n => plates[n].plate === key).forEach(n => plates[n].reads = r.reads_as);
+  }
+  await save();
+}
+
+const storySchema = {
+  type:'object',
+  properties: {
+    title:{type:'string'},
+    plates:{ type:'array', items:{ type:'object',
+      properties:{ plate:{type:'string'}, end_of_line:{type:'boolean'} },
+      required:['plate','end_of_line'] } }
+  },
+  required:['title','plates']
+};
+
+async function write() {
+  let pool = images.filter(n => plates[n] && plates[n].plate);
+  const count = Math.max(5, +$('count').value || 6);
+  if (pool.length < 5) return status('Need at least 5 read plates first.', true);
+  setBusy(true);
+  try {
+    await decodePlates(pool);
+    pool = pool.filter(n => plates[n].reads);
+    pool.forEach(n => { const box = document.querySelector(`[id="card-${n}"] .reads`); if (box) box.value = plates[n].reads; });
+    status('Arranging plates…');
+    // One entry per distinct plate, shuffled so each run gets a different mix to choose from.
+    const list = [...new Map(pool.map(n => [plates[n].plate, plates[n].reads])).entries()]
+      .sort(() => Math.random() - 0.5).map(([p, r]) => `${p} = "${r}"`);
+    const mode = $('mode').value;
+    const ask = mode === 'poem'
+      ? `a short poem. Mark "end_of_line": true on the plate that ends each line of the poem (and on the last plate).`
+      : `one sentence. Set "end_of_line": false on every plate except the last.`;
+    const out = await ollamaJSON($('writerModel').value, [{
+      role:'user',
+      content:`These are real personalized license plates people photographed, with what each one says:\n${list.join('\n')}\n\n` +
+        `Make ${ask} Like magnetic poetry, the ${mode} is made ONLY of these plates shown one after another: ` +
+        `you cannot add any words of your own. Pick exactly ${count} different plates and put them in the order ` +
+        `whose words, read straight through, make the best ${mode}. Give "plate" copied exactly from the list. ` +
+        `Also give a short "title". Be playful and clever.`
+    }], storySchema, { temperature:0.9 });
+    // Match each chosen plate back to a photo, and use the plate's own decoded words.
+    const used = new Set();
+    out.plates = out.plates.map(p => {
+      const key = p.plate.trim().toUpperCase();
+      const file = pool.find(n => !used.has(n) && plates[n].plate === key)
+        || pool.find(n => !used.has(n) && plates[n].plate.replace(/\W/g,'') === key.replace(/\W/g,''));
+      if (file) used.add(file);
+      return { ...p, file, reads_as: file && plates[file].reads };
+    }).filter(p => p.file);
+    if (out.plates.length < 5) throw new Error(`The writer only used ${out.plates.length} real plates from the list. Try again.`);
+    story = out;
+    showStory();
+    status(`Made a ${$('mode').value} from ${out.plates.length} plates. Press "Write" again for a different one.`);
+  } catch (e) {
+    status('Problem writing: ' + e.message, true);
+  }
+  setBusy(false);
+}
+
+function showStory() {
+  $('show').style.display = 'block';
+  $('title').textContent = story.title;
+  // The poem itself: plate photos laid out line by line, with how each one reads underneath.
+  $('poem').innerHTML = '';
+  let line = null;
+  story.plates.forEach((p, i) => {
+    if (!line) { line = document.createElement('div'); line.className = 'pline'; $('poem').appendChild(line); }
+    const w = document.createElement('div'); w.className = 'pword';
+    w.innerHTML = `<img src="${encodeURI(p.file)}"><div class="p"></div><div class="r"></div>`;
+    w.querySelector('.p').textContent = plates[p.file].plate;
+    w.querySelector('.r').textContent = p.reads_as;
+    w.onclick = () => { stop(); go(i); };
+    line.appendChild(w);
+    if (p.end_of_line) line = null;
+  });
+  const text = story.plates.map(p => p.reads_as + (p.end_of_line ? '\n' : ' ')).join('').trim();
+  const t = document.createElement('div'); t.className = 'ptext'; t.textContent = text;
+  $('poem').appendChild(t);
+  go(0);
+  play();
+  window.scrollTo({ top:0, behavior:'smooth' });
+}
+
+function go(i) {
+  slideIdx = (i + story.plates.length) % story.plates.length;
+  const p = story.plates[slideIdx];
+  $('slide').innerHTML = `<img src="${encodeURI(p.file)}"><div class="plate"></div><div class="reads"></div>`;
+  $('slide').querySelector('.plate').textContent = plates[p.file].plate;
+  $('slide').querySelector('.reads').textContent = p.reads_as;
+  [...document.querySelectorAll('.pword')].forEach((w, j) => w.classList.toggle('on', j === slideIdx));
+}
+function play() { stop(); $('play').textContent = 'Pause'; timer = setInterval(() => {
+  if (slideIdx === story.plates.length - 1) return stop();
+  go(slideIdx + 1);
+}, 3500); }
+function stop() { clearInterval(timer); timer = null; $('play').textContent = 'Play'; }
+
+function setBusy(b) { ['readBtn','rereadBtn','writeBtn'].forEach(id => $(id).disabled = b); }
+
+$('readBtn').onclick = () => readPlates(false);
+$('rereadBtn').onclick = () => { if (confirm('Read every photo again from scratch?')) readPlates(true); };
+$('writeBtn').onclick = write;
+$('play').onclick = () => { if (timer) stop(); else { if (slideIdx === story.plates.length - 1) go(0); play(); } };
+$('prev').onclick = () => { stop(); go(slideIdx - 1); };
+$('next').onclick = () => { stop(); go(slideIdx + 1); };
+init();
+</script>
+</body>
+</html>

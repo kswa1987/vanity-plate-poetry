@@ -1,8 +1,0 @@
-{
-  "siteUrl": "https://your-site.vercel.app",
-  "workerSecret": "paste the same WORKER_SECRET you set in Vercel",
-  "ollamaUrl": "http://localhost:11434",
-  "visionModel": "qwen2.5vl:7b",
-  "poemModel": "gemma3:12b",
-  "checkEverySeconds": 60
-}
