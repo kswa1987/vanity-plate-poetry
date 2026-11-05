@@ -1,0 +1,7 @@
+# Plate photos and their readings stay on your own PC.
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.gif
+plates.json
