@@ -4,6 +4,13 @@ param([switch]$NoBrowser)
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $port = 8765
+# Already running (say, from an earlier double-click)? Just open the page.
+try {
+  Invoke-WebRequest "http://localhost:$port/api/images" -UseBasicParsing -TimeoutSec 2 | Out-Null
+  Write-Host "Plate poems is already running. Opening it in your browser."
+  if (-not $NoBrowser) { Start-Process "http://localhost:$port/" }
+  exit
+} catch {}
 $listener = New-Object System.Net.HttpListener
 $listener.Prefixes.Add("http://localhost:$port/")
 $listener.Start()
