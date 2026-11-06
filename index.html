@@ -467,6 +467,7 @@ const decodeSchema = {
 const DECODE_RULES = `For each plate, work out what the owner meant. Personalized (vanity) plates squeeze a word, phrase, joke, or reference into 7 or 8 characters, so they need decoding like a puzzle.
 
 How to decode:
+- Think of popular acronyms and slang too: GOAT = greatest of all time (IGOAT = "I'm the GOAT"), OG, MVP, BOSS.
 - Sound it out loud. Letters and numbers stand for sounds: U = you, R = are, C = see, B = be, Y = why, I = I or eye, O = oh, N = and, Q = queue, X = cross or ex, Z = s or z at the end of a word, 2 = to/too, 4 = for, 8 = ate (GR8 = great, H8 = hate, L8R = later), 1 = one/won, 0 = o, 3 = e, 5 = s, 7 = t.
 - Numbers often stand in for the letters they look like (leetspeak): 1 = I or L, 3 = E, 0 = O, 4 = A, 5 = S, 7 = T, 8 = B, 9 = G. Try reading every number as a look-alike letter too, then sound it out (L1MTL3S = "limitless", P1CK1E = "pickle", B3AST = "beast").
 - Vowels are often dropped (SKL TCHR = school teacher). A single letter can stand for a whole word (V = very, M = my or me, N = and).
@@ -523,10 +524,11 @@ async function decodePlates(pool) {
 
 const lineupSchema = {
   type:'object',
-  properties: { candidates:{ type:'array', items:{ type:'object',
+  // minItems makes the model actually return 4 lineups; asked in words alone, gpt-oss usually stopped at 1.
+  properties: { candidates:{ type:'array', minItems:4, maxItems:4, items:{ type:'object',
     properties:{
       why_funny:{type:'string'},
-      items:{ type:'array', items:{ type:'object',
+      items:{ type:'array', minItems:5, items:{ type:'object',
         properties:{ words_before:{type:'string'}, id:{type:'integer'} }, required:['words_before','id'] } }
     },
     required:['why_funny','items'] } } },
@@ -552,24 +554,31 @@ async function write() {
       .sort(() => Math.random() - 0.5).slice(0, 80);
     const list = choices.map((n, i) => `${i + 1}. ${plates[n].reads}`).join('\n');
     const model = $('writerModel').value;
-    const out = await ollamaJSON(model, [{
+    const ask = () => ollamaJSON(model, [{
       role:'user',
       content:`Here are the meanings of real personalized license plates people photographed (numbered):\n${list}\n\n` +
         `Line up ${count} of these plates in a row, like magnetic poetry on a fridge, so that together they read as something funny: ` +
         `an absurd sentence, a weird juxtaposition, an accidental confession, a ridiculous headline, an unexpected twist at the end. ` +
         `It does not need to rhyme or be a poem. It does need to read as a phrase a person could say out loud and get a laugh.\n\n` +
-        `Each plate keeps its words exactly. Before each plate you may add at most 2 small glue words ` +
-        `("and", "the", "my", "to", "but", "of", "is", "I", "with"), or none. Nothing else may be added. ` +
-        `Glue words go between plates; don't repeat a plate's own words as glue.\n\n` +
-        `Give 4 different lineups, each with exactly ${count} different plates by number, and say in one line why each is funny.`
+        `Each plate keeps its words exactly. Before each plate you may add up to 3 connecting words, or none, ` +
+        `to join the plates into one flowing sentence. Make the connections do real work and vary them: ` +
+        `prepositions and phrases like "because of", "right after", "until", "instead of", "thanks to", "while", "unless", ` +
+        `"so", "who said", "is the reason", "next to", "on top of", "ever since", "which is why". ` +
+        `Use "and" or "but" at most once in a lineup. Nothing else may be added, and don't repeat a plate's own words as glue.\n\n` +
+        `Give 4 lineups, each with exactly ${count} different plates by number, and say in one line why each is funny. ` +
+        `Make the 4 really different: different plates, a different sentence shape, and different connecting words in each. ` +
+        `Don't start them all the same way.`
     }], lineupSchema,
       /gpt-oss/.test(model) ? { temperature:1, num_ctx:16384 } : { temperature:1, num_ctx:8192 },
       /gpt-oss/.test(model) ? { think:'medium' } : {});
+    // Now and then gpt-oss thinks for so long that its answer gets cut off; one retry usually fixes it.
+    let out;
+    try { out = await ask(); } catch (e) { status('Lining up plates... (second try)'); out = await ask(); }
     const lineups = out.candidates.map(c => {
       const seen = new Set();
       const items = c.items.filter(x => choices[x.id - 1] && !seen.has(x.id) && seen.add(x.id)).map(x => {
         const file = choices[x.id - 1];
-        let words = (x.words_before || '').trim().split(/\s+/).filter(Boolean).slice(0, 2).join(' ');  // hold it to 2 glue words
+        let words = (x.words_before || '').trim().split(/\s+/).filter(Boolean).slice(0, 3).join(' ');  // hold it to 3 glue words
         // The model sometimes repeats the plate's own words as glue ("I go" + "I go"); drop that.
         if (words && plates[file].reads.toLowerCase().startsWith(words.toLowerCase())) words = '';
         return { file, words };

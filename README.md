@@ -21,7 +21,8 @@ work before building the full site.
    meaning, or press "Looks right". Everything a person checks is kept for good.
 5. **Line up:** gpt-oss lines up at least 5 plates like magnetic poetry on a fridge, aiming for something
    funny (an absurd sentence, a weird juxtaposition, an accidental confession) rather than a strict poem.
-   It may add at most 2 small glue words ("and", "my", "but") between plates, and nothing else. It only
+   It may add up to 3 connecting words between plates ("thanks to", "ever since", "instead of"), using
+   "and" or "but" at most once, and nothing else. It only
    uses plates with a clear meaning, offers 4 lineups at a time, and all 4 are shown so a person can pick.
 
 The page is deliberately plain, web 1.0 style: each lineup is one horizontal line of cropped plates with
