@@ -1,6 +1,6 @@
 # Vanity Plate Poetry (local prototype)
 
-A bare-bones version that runs entirely on one Windows PC, to prove the AI steps work before building the full site.
+A bare-bones version that runs entirely on one computer (Windows or Mac), to prove the AI steps work before building the full site.
 
 1. **Check:** before any AI runs, every photo gets two fingerprints. Exact copies (same file) and near copies
    (the same picture resized or re-sent through a chat app) are set aside, so they're never read.
@@ -29,8 +29,10 @@ any connecting words between them, and the plain-text reading underneath.
    off, and runs out of room before it answers.
 2. Put your plate photos (`.jpg`, `.png`, `.webp`) in this folder, next to `index.html`. The photos aren't
    in the repo.
-3. Double-click **Start Plate Poems.bat**. It starts a tiny local web server (`server.ps1`) at
-   http://localhost:8765 and opens the page.
+3. Start the tiny local web server, which runs at http://localhost:8765 and opens the page:
+   - **Windows:** double-click **Start Plate Poems.bat** (runs `server.ps1`).
+   - **Mac or Linux:** install [Node.js](https://nodejs.org), then run `node server.js` in this folder.
+     Press Ctrl+C to stop it. `server.js` also works on Windows.
 4. Press **Check & read photos**, look over the table (you can type over any reading, and tick or untick
    "Use" to override what was set aside), then press **Write**.
 
@@ -39,8 +41,9 @@ Readings are saved to `plates.json`, so photos are only read once. Tested on an 
 ## Why a server?
 
 Ollama refuses requests from a page opened straight from disk (`file://`), but allows `localhost`.
-`server.ps1` serves this folder, lists the photos at `/api/images`, and saves `plates.json` at `/api/save`.
-It only needs the PowerShell that comes with Windows.
+The server serves this folder, lists the photos at `/api/images`, and saves `plates.json` at `/api/save`.
+There are two versions that do the same thing: `server.ps1` only needs the PowerShell that comes with
+Windows, and `server.js` only needs Node.js (no packages) and runs anywhere. If you change one, change both.
 
 ## Known issues
 

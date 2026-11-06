@@ -5,3 +5,6 @@
 *.webp
 *.gif
 plates.json
+
+# Claude Code settings for each person.
+.claude/
