@@ -1,9 +1,9 @@
 # Tiny local web server for the plate poem prototype.
 # Serves this folder at http://localhost:8765 so the page can talk to Ollama.
-param([switch]$NoBrowser)
+param([switch]$NoBrowser, [int]$Port = 8765)
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
-$port = 8765
+$port = $Port
 # Already running (say, from an earlier double-click)? Just open the page.
 try {
   Invoke-WebRequest "http://localhost:$port/api/images" -UseBasicParsing -TimeoutSec 2 | Out-Null

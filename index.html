@@ -20,12 +20,14 @@
   input.plate { font-family:"Courier New", monospace; font-weight:bold; width:110px; }
   input.reads { width:200px; }
   .small { font-size:12px; color:#555; }
+  tr.rejected td { background:#eee; color:#888; }
+  tr.rejected img { opacity:.4; }
 </style>
 </head>
 <body>
 <h1>Plate Poems</h1>
 <p class="center">
-  <button id="readBtn">Read plates</button>
+  <button id="readBtn">Check &amp; read photos</button>
   <button id="writeBtn">Write a</button>
   <select id="mode"><option value="poem">poem</option><option value="sentence">sentence</option></select>
   from <input id="count" type="number" min="5" max="12" value="6" style="width:40px"> plates
@@ -41,10 +43,11 @@
 </div>
 
 <h3 class="center">The plates</h3>
-<p class="center small">Fix any plate or meaning by typing over it.
+<p class="center small" id="summary"></p>
+<p class="center small">Fix any plate or meaning by typing over it. Untick "Use" to leave a plate out, or tick it to keep a rejected one.
   Reader: <input id="readerModel" value="qwen3-vl:8b-instruct" size="18">
   Writer: <input id="writerModel" value="gemma3:12b" size="12"></p>
-<table id="table"><tr><th>Plate</th><th>Says</th><th>What it means</th><th>Photo</th></tr></table>
+<table id="table"><tr><th>Use</th><th>Plate</th><th>Says</th><th>What it means</th><th>Status</th><th>Photo</th></tr></table>
 <p class="center small"><button id="rereadBtn">Re-read every photo</button></p>
 
 <script>
@@ -64,8 +67,8 @@ async function init() {
   images = await (await fetch('/api/images')).json();
   try { plates = await (await fetch('/plates.json', { cache:'no-store' })).json(); } catch { plates = {}; }
   await renderTable();
-  const todo = images.filter(n => !plates[n] || !plates[n].box).length;
-  status(`${images.length} photos found.` + (todo ? ` ${todo} still need reading: press "Read plates".` : ' Press "Write" to make something.'));
+  const todo = images.filter(n => !plates[n] || !plates[n].sha || !isRead(n)).length;
+  status(`${images.length} photos found.` + (todo ? ` ${todo} still need checking: press "Check & read photos".` : ' Press "Write" to make something.'));
   try { await fetch(OLLAMA + '/api/tags'); } catch { status('Cannot reach Ollama. Make sure the Ollama app is running.', true); }
 }
 
@@ -93,22 +96,98 @@ async function crop(name) {
   return crops[name] = c.toDataURL('image/jpeg', 0.9);
 }
 
+// Fingerprints for spotting copies before the AI reads anything:
+// sha = exact same file, dhash = a 64-bit "what it looks like" hash that survives resizing and recompression.
+async function fingerprint(name) {
+  const bytes = await (await fetch(encodeURI(name))).arrayBuffer();
+  const sha = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
+    .map(b => b.toString(16).padStart(2, '0')).join('');
+  const img = await loadImage(name);
+  // Shrink in two steps and average 8x8 blocks by hand: one big jump straight to 9x8 is too noisy to compare.
+  const mid = document.createElement('canvas'); mid.width = 288; mid.height = 256;
+  const m = mid.getContext('2d'); m.imageSmoothingQuality = 'high';
+  m.drawImage(img, 0, 0, 288, 256);
+  const c = document.createElement('canvas'); c.width = 72; c.height = 64;
+  const ctx = c.getContext('2d'); ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(mid, 0, 0, 72, 64);
+  const px = ctx.getImageData(0, 0, 72, 64).data;
+  const cell = (cx, cy) => {
+    let sum = 0;
+    for (let y = cy * 8; y < cy * 8 + 8; y++) for (let x = cx * 8; x < cx * 8 + 8; x++) {
+      const i = (y * 72 + x) * 4;
+      sum += px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114;
+    }
+    return sum;
+  };
+  let bits = '';
+  for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) bits += cell(x, y) > cell(x + 1, y) ? '1' : '0';
+  return { sha, dhash: bits };
+}
+const hamming = (a, b) => { let d = 0; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++; return d; };
+const SIMILAR = 6;   // dhash bits that may differ for two photos to count as the same picture
+const norm = s => (s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+// Decide which photos to set aside, and why. Runs fresh each time, so fixing a plate re-sorts everything.
+function classify() {
+  const status = {}, bySha = {}, kept = [], byPlate = {};
+  for (const name of images) {
+    const p = plates[name] || {};
+    if (!p.sha) { status[name] = { ok:true, why:'not checked yet' }; continue; }
+    if (bySha[p.sha]) { status[name] = { ok:false, why:`exact copy of ${bySha[p.sha]}` }; continue; }
+    bySha[p.sha] = name;
+    const twin = kept.find(k => hamming(plates[k].dhash, p.dhash) <= SIMILAR);
+    if (twin) { status[name] = { ok:false, why:`near copy of ${twin}` }; continue; }
+    kept.push(name);
+    if (!('hasPlate' in p) && !p.box) { status[name] = { ok:true, why:'not read yet' }; continue; }
+    if (p.hasPlate === false || !norm(p.plate)) { status[name] = { ok:false, why:'no plate found' }; continue; }
+    (byPlate[norm(p.plate)] ||= []).push(name);
+    status[name] = { ok:true, why:'' };
+  }
+  // Same plate in several photos: keep the one where the plate is biggest (usually the clearest).
+  const area = n => { const b = plates[n].box; return b ? (b[2] - b[0]) * (b[3] - b[1]) : 0; };
+  for (const group of Object.values(byPlate)) {
+    if (group.length < 2) continue;
+    const best = group.reduce((a, b) => area(b) > area(a) ? b : a);
+    group.filter(n => n !== best).forEach(n => status[n] = { ok:false, why:`same plate as ${best}` });
+  }
+  // A tick or untick in the "Use" column overrides the automatic choice.
+  for (const name of images) {
+    const s = status[name], use = plates[name] && plates[name].use;
+    s.use = use === undefined ? s.ok : use;
+  }
+  return status;
+}
+const usable = () => { const s = classify(); return images.filter(n => s[n].use && plates[n] && plates[n].plate); };
+
 async function renderTable() {
   const table = $('table');
   while (table.rows.length > 1) table.deleteRow(1);
+  const status = classify();
+  const counts = {};
   for (const name of images) {
     const p = plates[name] || {};
+    const s = status[name];
     const row = table.insertRow();
     row.id = 'row-' + name;
-    row.innerHTML = `<td><img></td><td><input class="plate"></td><td><input class="reads"></td><td class="small"></td>`;
-    if (p.box) row.querySelector('img').src = await crop(name);
+    row.className = s.use ? '' : 'rejected';
+    row.innerHTML = `<td><input type="checkbox" class="use"></td><td><img></td><td><input class="plate"></td>` +
+      `<td><input class="reads"></td><td class="small"></td><td class="small"></td>`;
+    if (p.sha) row.querySelector('img').src = await crop(name).catch(() => '');  // whole photo when there's no plate box
+    row.querySelector('.use').checked = s.use;
     row.querySelector('.plate').value = p.plate || '';
     row.querySelector('.reads').value = p.reads || '';
-    row.cells[3].textContent = name;
+    row.cells[4].textContent = s.why + (s.use !== s.ok ? (s.use ? ' (kept anyway)' : ' (left out)') : '');
+    row.cells[5].textContent = name;
+    const key = s.ok ? (s.why || 'ok') : s.why.replace(/ of .*| as .*/, '');
+    counts[key] = (counts[key] || 0) + 1;
+    row.querySelector('.use').onchange = e => {
+      if (!plates[name]) return;
+      plates[name].use = e.target.checked === s.ok ? undefined : e.target.checked;
+      save(); renderTable();
+    };
     row.querySelector('.plate').onchange = e => {
-      plates[name] = { ...p, plate: e.target.value.trim().toUpperCase(), reads: undefined };
-      row.querySelector('.reads').value = '';
-      save();
+      plates[name] = { ...p, plate: e.target.value.trim().toUpperCase(), hasPlate: !!e.target.value.trim(), reads: undefined };
+      save(); renderTable();
     };
     row.querySelector('.reads').onchange = e => {
       if (!plates[name]) return;
@@ -116,6 +195,9 @@ async function renderTable() {
       save();
     };
   }
+  const using = images.filter(n => status[n].use).length;
+  $('summary').textContent = `${images.length} photos: using ${using}. ` +
+    Object.entries(counts).filter(([k]) => k !== 'ok').map(([k, v]) => `${v} ${k}`).join(', ');
 }
 
 // Shrink a photo to a JPEG the vision model can handle quickly.
@@ -140,34 +222,48 @@ async function ollamaJSON(model, messages, schema, options) {
 
 const plateSchema = {
   type:'object',
-  properties: { plate:{type:'string'}, state:{type:'string'}, box:{type:'array', items:{type:'number'}} },
-  required:['plate','state','box']
+  properties: { has_plate:{type:'boolean'}, plate:{type:'string'}, state:{type:'string'}, box:{type:'array', items:{type:'number'}} },
+  required:['has_plate','plate','state','box']
 };
+const isRead = n => plates[n] && (plates[n].read || plates[n].box);
 
-// Step 1: Qwen reads the text off each plate and says where the plate is in the photo.
+// Step 1: fingerprint every photo so exact and near copies are set aside before the AI spends time on them,
+// then Qwen reads the text off each remaining plate and says where the plate is in the photo.
 async function readPlates(all) {
-  const todo = images.filter(n => all || !plates[n] || !plates[n].box);
-  if (!todo.length) return status('Every photo is already read.');
   setBusy(true);
+  const unchecked = images.filter(n => !plates[n] || !plates[n].sha);
   let i = 0;
+  for (const name of unchecked) {
+    if (++i % 10 === 1) status(`Checking photos for copies: ${i} of ${unchecked.length}...`);
+    try { plates[name] = { ...(plates[name] || {}), ...await fingerprint(name) }; }
+    catch (e) { plates[name] = { ...(plates[name] || {}), sha: 'unreadable-' + name, dhash: '', hasPlate: false, read: true }; }
+  }
+  if (unchecked.length) await save();
+  const status0 = classify();
+  const todo = images.filter(n => !/copy/.test(status0[n].why) && (all || !isRead(n)));
+  if (!todo.length) { setBusy(false); await renderTable(); return status('Every photo is already checked and read.'); }
+  i = 0;
   for (const name of todo) {
     i++;
     status(`Reading plate ${i} of ${todo.length} (${name})... The first one is slow while the model loads.`);
     try {
       const out = await ollamaJSON($('readerModel').value, [{
         role:'user',
-        content:'This photo shows a car license plate, probably a personalized vanity plate. ' +
-          'Read the large main characters of the plate exactly as written (letters, numbers, and any spaces or symbols that are part of it). ' +
+        content:'First decide whether this photo shows a real vehicle license plate you can read (has_plate). ' +
+          'Screenshots, memes, chat images, people, food, scenery, and photos where no plate is readable are has_plate false. ' +
+          'If there is a plate (probably a personalized vanity plate), read its large main characters exactly as written ' +
+          '(letters, numbers, and any spaces or symbols that are part of it). ' +
           'Ignore the state name, slogans, dealer frames, and registration stickers. ' +
           'Give the state or country if you can tell, otherwise an empty string. ' +
           'Give the bounding box of the whole plate as [x1, y1, x2, y2] in coordinates from 0 to 1000 relative to the image width and height. ' +
-          'If there is no readable plate, return an empty plate.',
+          'If has_plate is false, return an empty plate and [0, 0, 0, 0].',
         images:[await shrink(name)]
       }], plateSchema, { temperature:0 });
       const old = plates[name] || {};
       const plate = (out.plate || '').trim().toUpperCase();
       const box = out.box && out.box.length === 4 && out.box[2] > out.box[0] && out.box[3] > out.box[1] ? out.box : null;
-      plates[name] = { plate, state: out.state, box, reads: old.plate === plate ? old.reads : undefined };
+      plates[name] = { ...old, plate, state: out.state, box, read: true, hasPlate: !!out.has_plate && !!plate,
+        reads: old.plate === plate ? old.reads : undefined };
       delete crops[name];
       await save();
     } catch (e) {
@@ -177,7 +273,7 @@ async function readPlates(all) {
   }
   await renderTable();
   setBusy(false);
-  status(`Done. Read ${todo.length} plates. Check them over below, then press "Write".`);
+  status(`Done. Read ${todo.length} photos. ${$('summary').textContent} Check them over below, then press "Write".`);
 }
 
 const decodeSchema = {
@@ -189,24 +285,27 @@ const decodeSchema = {
 
 // Step 2: Gemma works out what each plate says in plain words, once, and we remember it.
 async function decodePlates(pool) {
-  const todo = [...new Set(pool.filter(n => !plates[n].reads).map(n => plates[n].plate))];
-  if (!todo.length) return;
-  status(`Working out what ${todo.length} plates say...`);
-  const out = await ollamaJSON($('writerModel').value, [{
-    role:'user',
-    content:`Here are ${todo.length} personalized (vanity) license plates:\n${todo.join('\n')}\n\n` +
-      `Decode each one into the plain words it spells. Vanity plates squeeze words into 7 or 8 characters ` +
-      `(GR8 = great, 4 = for, U = you, 2 = to, ♥ = love or heart, missing vowels, and so on). ` +
-      `Give only the words the plate spells, nothing extra. If it is a name or you cannot tell, give your best guess. ` +
-      `Return "readings" with one entry for every one of the ${todo.length} plates, with "plate" copied exactly.`
-  }], decodeSchema, { temperature:0 });
-  if (!out.readings.length) throw new Error('The writer did not decode any plates. Try again.');
-  for (const r of out.readings) {
-    const key = r.plate.trim().toUpperCase();
-    pool.filter(n => plates[n].plate === key).forEach(n => plates[n].reads = r.reads_as);
+  const all = [...new Set(pool.filter(n => !plates[n].reads).map(n => plates[n].plate))];
+  // A few dozen at a time, so a big photo set doesn't overflow what the model can take in at once.
+  for (let start = 0; start < all.length; start += 40) {
+    const todo = all.slice(start, start + 40);
+    status(`Working out what the plates say: ${start + todo.length} of ${all.length}...`);
+    const out = await ollamaJSON($('writerModel').value, [{
+      role:'user',
+      content:`Here are ${todo.length} personalized (vanity) license plates:\n${todo.join('\n')}\n\n` +
+        `Decode each one into the plain words it spells. Vanity plates squeeze words into 7 or 8 characters ` +
+        `(GR8 = great, 4 = for, U = you, 2 = to, ♥ = love or heart, missing vowels, and so on). ` +
+        `Give only the words the plate spells, nothing extra. If it is a name or you cannot tell, give your best guess. ` +
+        `Return "readings" with one entry for every one of the ${todo.length} plates, with "plate" copied exactly.`
+    }], decodeSchema, { temperature:0 });
+    if (!out.readings.length) throw new Error('The writer did not decode any plates. Try again.');
+    for (const r of out.readings) {
+      const key = r.plate.trim().toUpperCase();
+      pool.filter(n => plates[n].plate === key).forEach(n => plates[n].reads = r.reads_as);
+    }
+    await save();
   }
-  await save();
-  await renderTable();
+  if (all.length) await renderTable();
 }
 
 const storySchema = {
@@ -222,17 +321,18 @@ const storySchema = {
 
 // Step 3: Gemma picks plates and puts them in order, with at most 2 small words between them.
 async function write() {
-  let pool = images.filter(n => plates[n] && plates[n].plate);
+  let pool = usable();
   const count = Math.max(5, +$('count').value || 6);
-  if (pool.length < 5) return status('Need at least 5 read plates first.', true);
+  if (pool.length < 5) return status('Need at least 5 usable plates first. Press "Check & read photos".', true);
   setBusy(true);
   try {
     await decodePlates(pool);
     pool = pool.filter(n => plates[n].reads);
     status('Arranging plates...');
     // One entry per distinct plate, shuffled so each run gets a different mix to choose from.
+    // Capped at 80 so a big photo set still fits in what the model can take in at once.
     const list = [...new Map(pool.map(n => [plates[n].plate, plates[n].reads])).entries()]
-      .sort(() => Math.random() - 0.5).map(([p, r]) => `${p} = "${r}"`);
+      .sort(() => Math.random() - 0.5).slice(0, 80).map(([p, r]) => `${p} = "${r}"`);
     const mode = $('mode').value;
     const out = await ollamaJSON($('writerModel').value, [{
       role:'user',
