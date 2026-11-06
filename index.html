@@ -346,7 +346,7 @@ const DECODE_RULES = `For each plate, work out what the owner meant. Personalize
 How to decode:
 - Sound it out loud. Letters and numbers stand for sounds: U = you, R = are, C = see, B = be, Y = why, I = I or eye, O = oh, N = and, Q = queue, X = cross or ex, Z = s or z at the end of a word, 2 = to/too, 4 = for, 8 = ate (GR8 = great, H8 = hate, L8R = later), 1 = one/won, 0 = o, 3 = e, 5 = s, 7 = t.
 - Vowels are often dropped (SKL TCHR = school teacher). A single letter can stand for a whole word (V = very, M = my or me, N = and).
-- Spaces, dashes, dots and stars just split words. A heart symbol means love.
+- Spaces, dashes, dots, stars and hearts are usually just spacers between words. Texas plates let owners put a decorative heart or star where a space would go, so a heart is normally NOT a word: FRST♥LDY = "first lady", MAMA♥BEAR = "mama bear". Only read a heart as "love" when the phrase needs a verb there and makes no sense without it (I♥NY = "I love New York").
 - Think about pop culture, internet memes and slang (OK BOOMR = "ok boomer", RIZZLER, SKIBIDI), music genres, Bible verses (JOHN 316), sports teams and schools (HOOK EM = Texas Longhorns, a number before a school is a class year), brands, and Spanish (MI CASA).
 - Think about car culture: car models and trims (GT, SRT, AMG, 911), a two-digit number after a word is often the car's model year, EVs (NO GAS), JDM, lowriders.
 - ATX = Austin, Texas. HTX = Houston. DTX = Dallas.
@@ -354,12 +354,12 @@ How to decode:
 
 Sound each one out and consider the options before answering. Give "reads_as": the meaning in plain words as the owner intended, short and natural, like you'd say it out loud (for example "school teacher", "ok boomer", "great day"). Use the actual words, not a description of them.`;
 
-// Step 2: work out what each plate means in plain words, once, and remember it. Ten at a time keeps the
+// Step 2: work out what each plate means in plain words, once, and remember it. Five at a time keeps the
 // model's attention on each plate. Ordinary state-issued plates get flagged so they stay out of poems.
 async function decodePlates(pool) {
   const all = [...new Set(pool.filter(n => !plates[n].reads).map(n => plates[n].plate))];
-  for (let start = 0; start < all.length; start += 10) {
-    const todo = all.slice(start, start + 10);
+  for (let start = 0; start < all.length; start += 5) {
+    const todo = all.slice(start, start + 5);
     status(`Working out what the plates mean: ${start + todo.length} of ${all.length}...`);
     const model = $('decoderModel').value;
     const ask = () => ollamaJSON(model, [{
@@ -368,10 +368,15 @@ async function decodePlates(pool) {
         DECODE_RULES + `\n\nReturn "readings" with one entry per plate, in the same order, with "plate" copied exactly.`
     }], decodeSchema,
       // gpt-oss thinks before answering and needs its normal temperature: at 0 it loops and runs out of room.
+      // Its "low" thinking was as accurate as "medium" in testing, twice as fast, and never ran out of room.
       /gpt-oss/.test(model) ? { temperature:1, num_ctx:16384 } : { temperature:0, num_ctx:8192 },
-      /gpt-oss/.test(model) ? { think:'medium' } : {});
+      /gpt-oss/.test(model) ? { think:'low' } : {});
     let out;
-    try { out = await ask(); } catch (e) { out = await ask(); }  // one retry if the answer came back cut off
+    try { out = await ask(); }
+    catch (e) {
+      // One retry if the answer came back cut off; after that, skip these few and carry on.
+      try { out = await ask(); } catch (e2) { continue; }
+    }
     out.readings.forEach((r, i) => {
       // Match by text, falling back to position in case the model retyped the plate slightly differently.
       const key = norm(r.plate);
