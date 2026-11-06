@@ -54,8 +54,7 @@ It only needs the PowerShell that comes with Windows.
   More plates and a stronger writer model should help.
 - About a third of meanings are still wrong, mostly memes and inside jokes (V DMUIR = "very demure" is
   missed). Fix them in the "What it means" column. Meanings you type in are kept when you press
-  "Work out meanings again". A cloud model such as Claude would likely do much better here.
-- Decoding with gpt-oss takes about 4 seconds per plate (roughly 30 minutes for 450 plates), once.
+  "Work out meanings again".- Decoding with gpt-oss takes about 4 seconds per plate (roughly 30 minutes for 450 plates), once.
   Results are saved in `plates.json`.
 - Two photos of the same plate only count as the same plate if Qwen reads them identically (ignoring spaces
   and symbols). A one-letter misread lets a repeat slip through. Fixing the reading in the table catches it.
