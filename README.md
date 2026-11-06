@@ -7,8 +7,13 @@ A bare-bones version that runs entirely on one Windows PC, to prove the AI steps
 2. **Read:** a vision model (Qwen3-VL) decides whether the photo shows a readable plate at all, reads its text,
    and finds where the plate is, so the page can crop each photo down to just the plate. Photos with no plate
    (screenshots, memes, scenery) are set aside. When the same plate shows up in several photos, only the one
-   where the plate is biggest (usually the clearest) is kept.
-3. **Decode:** a writing model (Gemma 3) works out what each plate says in plain words (LIV2FSH = "live to fish").
+   where the plate is biggest (usually the clearest) is kept. Each plate is then read a second time from an
+   enlarged close-up. If the two reads disagree, Qwen compares them character by character against the
+   close-up and picks or corrects one. On a hand-checked sample this cut misreads roughly in half.
+3. **Decode:** a reasoning model (gpt-oss 20B) works out what each plate means, sounding it out and thinking
+   about slang, memes, car culture and pop culture (D8NG3R = "danger", TOTHLES = "toothless"). It also flags
+   ordinary state-issued plates (like TGL 7366), which are left out of poems. On 40 hand-checked plates it got
+   about 27 right, against about 21 for Gemma 3 12B.
 4. **Write:** Gemma picks at least 5 plates and puts them in order so the plates, shown one after another,
    read as a poem or sentence, like magnetic poetry. It may add at most 2 small connecting words
    ("and", "of my") between plates, and nothing else.
@@ -18,10 +23,11 @@ any connecting words between them, and the plain-text reading underneath.
 
 ## Setup
 
-1. Install [Ollama](https://ollama.com), then download the two models (about 14 GB):
+1. Install [Ollama](https://ollama.com), then download the three models (about 28 GB):
 
    ```
    ollama pull qwen3-vl:8b-instruct
+   ollama pull gpt-oss:20b
    ollama pull gemma3:12b
    ```
 
@@ -46,7 +52,11 @@ It only needs the PowerShell that comes with Windows.
 
 - Poems still don't make much sense ("Danger of Fear God and ATX King to Live 2 Fish but Str Girl Welcome").
   More plates and a stronger writer model should help.
-- Some decoded meanings are wrong. Fix them in the "What it means" column.
+- About a third of meanings are still wrong, mostly memes and inside jokes (V DMUIR = "very demure" is
+  missed). Fix them in the "What it means" column. Meanings you type in are kept when you press
+  "Work out meanings again".
+- Decoding with gpt-oss takes about 4 seconds per plate (roughly 30 minutes for 450 plates), once.
+  Results are saved in `plates.json`.
 - Two photos of the same plate only count as the same plate if Qwen reads them identically (ignoring spaces
   and symbols). A one-letter misread lets a repeat slip through. Fixing the reading in the table catches it.
 # Vanity Plate Poetry

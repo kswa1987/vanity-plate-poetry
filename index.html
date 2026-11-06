@@ -46,9 +46,10 @@
 <p class="center small" id="summary"></p>
 <p class="center small">Fix any plate or meaning by typing over it. Untick "Use" to leave a plate out, or tick it to keep a rejected one.
   Reader: <input id="readerModel" value="qwen3-vl:8b-instruct" size="18">
+  Decoder: <input id="decoderModel" value="gpt-oss:20b" size="12">
   Writer: <input id="writerModel" value="gemma3:12b" size="12"></p>
 <table id="table"><tr><th>Use</th><th>Plate</th><th>Says</th><th>What it means</th><th>Status</th><th>Photo</th></tr></table>
-<p class="center small"><button id="rereadBtn">Re-read every photo</button></p>
+<p class="center small"><button id="redoBtn">Work out meanings again</button> <button id="rereadBtn">Re-read every photo</button></p>
 
 <script>
 const OLLAMA = 'http://localhost:11434';
@@ -140,6 +141,7 @@ function classify() {
     kept.push(name);
     if (!('hasPlate' in p) && !p.box) { status[name] = { ok:true, why:'not read yet' }; continue; }
     if (p.hasPlate === false || !norm(p.plate)) { status[name] = { ok:false, why:'no plate found' }; continue; }
+    if (p.vanity === false) { status[name] = { ok:false, why:'ordinary plate (not personalized)' }; continue; }
     (byPlate[norm(p.plate)] ||= []).push(name);
     status[name] = { ok:true, why:'' };
   }
@@ -186,12 +188,13 @@ async function renderTable() {
       save(); renderTable();
     };
     row.querySelector('.plate').onchange = e => {
-      plates[name] = { ...p, plate: e.target.value.trim().toUpperCase(), hasPlate: !!e.target.value.trim(), reads: undefined };
+      plates[name] = { ...p, plate: e.target.value.trim().toUpperCase(), hasPlate: !!e.target.value.trim(), checked: true, reads: undefined };
       save(); renderTable();
     };
     row.querySelector('.reads').onchange = e => {
       if (!plates[name]) return;
       plates[name].reads = e.target.value.trim() || undefined;
+      plates[name].readsEdited = !!plates[name].reads;
       save();
     };
   }
@@ -210,10 +213,10 @@ async function shrink(name, max = 1280) {
   return c.toDataURL('image/jpeg', 0.9).split(',')[1];
 }
 
-async function ollamaJSON(model, messages, schema, options) {
+async function ollamaJSON(model, messages, schema, options, extra) {
   const r = await fetch(OLLAMA + '/api/chat', {
     method:'POST',
-    body: JSON.stringify({ model, messages, format: schema, stream:false, options })
+    body: JSON.stringify({ model, messages, format: schema, stream:false, options, ...extra })
   });
   if (!r.ok) throw new Error(`${model}: ${(await r.text()).slice(0, 300)}`);
   const data = await r.json();
@@ -226,6 +229,57 @@ const plateSchema = {
   required:['has_plate','plate','state','box']
 };
 const isRead = n => plates[n] && (plates[n].read || plates[n].box);
+
+// A close-up of just the plate, enlarged, for a second, more careful read.
+async function plateCloseup(name) {
+  const img = await loadImage(name);
+  const W = img.naturalWidth, H = img.naturalHeight;
+  let [x1, y1, x2, y2] = plates[name].box;
+  const padX = (x2 - x1) * 0.15, padY = (y2 - y1) * 0.3;
+  x1 = Math.max(0, x1 - padX); y1 = Math.max(0, y1 - padY); x2 = Math.min(1000, x2 + padX); y2 = Math.min(1000, y2 + padY);
+  const sx = x1 / 1000 * W, sy = y1 / 1000 * H, sw = (x2 - x1) / 1000 * W, sh = (y2 - y1) / 1000 * H;
+  const s = Math.min(1024 / sw, 4);
+  const c = document.createElement('canvas');
+  c.width = Math.round(sw * s); c.height = Math.round(sh * s);
+  const ctx = c.getContext('2d'); ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.92).split(',')[1];
+}
+
+// Second opinion: read the plate again from the close-up. If the two reads disagree, show Qwen both and have it
+// compare them character by character against the close-up. In testing this roughly halved the misreads.
+async function doubleCheck(name) {
+  const p = plates[name];
+  if (p.hasPlate && p.box) {
+    const closeup = await plateCloseup(name);
+    const second = (await ollamaJSON($('readerModel').value, [{
+      role:'user',
+      content:'This is a close-up of a vehicle license plate. Read the large main characters of the plate exactly as written, ' +
+        'character by character (letters, numbers, and any spaces, dashes, dots, stars or heart symbols that are part of it). ' +
+        'Be careful with look-alike characters: 0/O/D/Q, 1/I/L/J, 5/S, 8/B, 2/Z, 6/G, M/N/W, U/V. ' +
+        'Ignore the state name, slogans, frames and stickers.',
+      images:[closeup]
+    }], { type:'object', properties:{ plate:{type:'string'} }, required:['plate'] }, { temperature:0 })).plate.trim().toUpperCase();
+    if (norm(second) !== norm(p.plate)) {
+      const out = await ollamaJSON($('readerModel').value, [{
+        role:'user',
+        content:`This is a close-up of a vehicle license plate. Two earlier readings of it disagree:\nA: ${p.plate}\nB: ${second}\n` +
+          'Look carefully at the plate and compare the readings character by character in "comparison" (keep it short). ' +
+          'Then give "plate": the exact characters on the plate. It may be A, B, or a correction of either. ' +
+          'Ignore the state name, slogans, frames, and stickers.',
+        images:[closeup]
+      }], { type:'object', properties:{ comparison:{type:'string'}, plate:{type:'string'} }, required:['comparison','plate'] },
+        { temperature:0, num_predict:400 });
+      let final = out.plate.trim().toUpperCase();
+      if (final === 'A') final = p.plate;
+      if (final === 'B') final = second;
+      p.firstRead = p.plate;
+      if (final && final !== p.plate) { p.plate = final; p.reads = undefined; }
+    }
+  }
+  p.checked = true;
+  await save();
+}
 
 // Step 1: fingerprint every photo so exact and near copies are set aside before the AI spends time on them,
 // then Qwen reads the text off each remaining plate and says where the plate is in the photo.
@@ -240,13 +294,15 @@ async function readPlates(all) {
   }
   if (unchecked.length) await save();
   const status0 = classify();
-  const todo = images.filter(n => !/copy/.test(status0[n].why) && (all || !isRead(n)));
+  const needsCheck = n => plates[n].hasPlate !== false && !plates[n].checked;
+  const todo = images.filter(n => !/copy/.test(status0[n].why) && (all || !isRead(n) || needsCheck(n)));
   if (!todo.length) { setBusy(false); await renderTable(); return status('Every photo is already checked and read.'); }
   i = 0;
   for (const name of todo) {
     i++;
     status(`Reading plate ${i} of ${todo.length} (${name})... The first one is slow while the model loads.`);
     try {
+      if (!all && isRead(name)) { await doubleCheck(name); continue; }
       const out = await ollamaJSON($('readerModel').value, [{
         role:'user',
         content:'First decide whether this photo shows a real vehicle license plate you can read (has_plate). ' +
@@ -263,9 +319,9 @@ async function readPlates(all) {
       const plate = (out.plate || '').trim().toUpperCase();
       const box = out.box && out.box.length === 4 && out.box[2] > out.box[0] && out.box[3] > out.box[1] ? out.box : null;
       plates[name] = { ...old, plate, state: out.state, box, read: true, hasPlate: !!out.has_plate && !!plate,
-        reads: old.plate === plate ? old.reads : undefined };
+        checked: false, reads: old.plate === plate ? old.reads : undefined };
       delete crops[name];
-      await save();
+      await doubleCheck(name);
     } catch (e) {
       status(`Problem reading ${name}: ${e.message}`, true);
       setBusy(false); return renderTable();
@@ -279,30 +335,57 @@ async function readPlates(all) {
 const decodeSchema = {
   type:'object',
   properties: { readings:{ type:'array', items:{ type:'object',
-    properties:{ plate:{type:'string'}, reads_as:{type:'string'} }, required:['plate','reads_as'] } } },
+    properties:{ plate:{type:'string'}, is_vanity:{type:'boolean'}, reads_as:{type:'string'} },
+    required:['plate','is_vanity','reads_as'] } } },
   required:['readings']
 };
 
-// Step 2: Gemma works out what each plate says in plain words, once, and we remember it.
+// The examples here are deliberately NOT plates from the photo set, so testing against real plates stays fair.
+const DECODE_RULES = `For each plate, work out what the owner meant. Personalized (vanity) plates squeeze a word, phrase, joke, or reference into 7 or 8 characters, so they need decoding like a puzzle.
+
+How to decode:
+- Sound it out loud. Letters and numbers stand for sounds: U = you, R = are, C = see, B = be, Y = why, I = I or eye, O = oh, N = and, Q = queue, X = cross or ex, Z = s or z at the end of a word, 2 = to/too, 4 = for, 8 = ate (GR8 = great, H8 = hate, L8R = later), 1 = one/won, 0 = o, 3 = e, 5 = s, 7 = t.
+- Vowels are often dropped (SKL TCHR = school teacher). A single letter can stand for a whole word (V = very, M = my or me, N = and).
+- Spaces, dashes, dots, stars and hearts are usually just spacers between words. Texas plates let owners put a decorative heart or star where a space would go, so a heart is normally NOT a word: FRST♥LDY = "first lady", MAMA♥BEAR = "mama bear". Only read a heart as "love" when the phrase needs a verb there and makes no sense without it (I♥NY = "I love New York").
+- Think about pop culture, internet memes and slang (OK BOOMR = "ok boomer", RIZZLER, SKIBIDI), music genres, Bible verses (JOHN 316), sports teams and schools (HOOK EM = Texas Longhorns, a number before a school is a class year), brands, and Spanish (MI CASA).
+- Think about car culture: car models and trims (GT, SRT, AMG, 911), a two-digit number after a word is often the car's model year, EVs (NO GAS), JDM, lowriders.
+- ATX = Austin, Texas. HTX = Houston. DTX = Dallas.
+- Ordinary state-issued plates are random letters and numbers with no meaning (like ABC-1234 or KLM 5521). Mark those is_vanity false.
+
+Sound each one out and consider the options before answering. Give "reads_as": the meaning in plain words as the owner intended, short and natural, like you'd say it out loud (for example "school teacher", "ok boomer", "great day"). Use the actual words, not a description of them.`;
+
+// Step 2: work out what each plate means in plain words, once, and remember it. Five at a time keeps the
+// model's attention on each plate. Ordinary state-issued plates get flagged so they stay out of poems.
 async function decodePlates(pool) {
   const all = [...new Set(pool.filter(n => !plates[n].reads).map(n => plates[n].plate))];
-  // A few dozen at a time, so a big photo set doesn't overflow what the model can take in at once.
-  for (let start = 0; start < all.length; start += 40) {
-    const todo = all.slice(start, start + 40);
-    status(`Working out what the plates say: ${start + todo.length} of ${all.length}...`);
-    const out = await ollamaJSON($('writerModel').value, [{
+  for (let start = 0; start < all.length; start += 5) {
+    const todo = all.slice(start, start + 5);
+    status(`Working out what the plates mean: ${start + todo.length} of ${all.length}...`);
+    const model = $('decoderModel').value;
+    const ask = () => ollamaJSON(model, [{
       role:'user',
-      content:`Here are ${todo.length} personalized (vanity) license plates:\n${todo.join('\n')}\n\n` +
-        `Decode each one into the plain words it spells. Vanity plates squeeze words into 7 or 8 characters ` +
-        `(GR8 = great, 4 = for, U = you, 2 = to, ♥ = love or heart, missing vowels, and so on). ` +
-        `Give only the words the plate spells, nothing extra. If it is a name or you cannot tell, give your best guess. ` +
-        `Return "readings" with one entry for every one of the ${todo.length} plates, with "plate" copied exactly.`
-    }], decodeSchema, { temperature:0 });
-    if (!out.readings.length) throw new Error('The writer did not decode any plates. Try again.');
-    for (const r of out.readings) {
-      const key = r.plate.trim().toUpperCase();
-      pool.filter(n => plates[n].plate === key).forEach(n => plates[n].reads = r.reads_as);
+      content:`Here are ${todo.length} license plates photographed in the US (mostly Texas):\n${todo.join('\n')}\n\n` +
+        DECODE_RULES + `\n\nReturn "readings" with one entry per plate, in the same order, with "plate" copied exactly.`
+    }], decodeSchema,
+      // gpt-oss thinks before answering and needs its normal temperature: at 0 it loops and runs out of room.
+      // Its "low" thinking was as accurate as "medium" in testing, twice as fast, and never ran out of room.
+      /gpt-oss/.test(model) ? { temperature:1, num_ctx:16384 } : { temperature:0, num_ctx:8192 },
+      /gpt-oss/.test(model) ? { think:'low' } : {});
+    let out;
+    try { out = await ask(); }
+    catch (e) {
+      // One retry if the answer came back cut off; after that, skip these few and carry on.
+      try { out = await ask(); } catch (e2) { continue; }
     }
+    out.readings.forEach((r, i) => {
+      // Match by text, falling back to position in case the model retyped the plate slightly differently.
+      const key = norm(r.plate);
+      const plate = todo.find(t => norm(t) === key) || todo[i];
+      pool.filter(n => plates[n].plate === plate).forEach(n => {
+        plates[n].reads = r.reads_as;
+        plates[n].vanity = r.is_vanity;
+      });
+    });
     await save();
   }
   if (all.length) await renderTable();
@@ -327,7 +410,7 @@ async function write() {
   setBusy(true);
   try {
     await decodePlates(pool);
-    pool = pool.filter(n => plates[n].reads);
+    pool = usable().filter(n => plates[n].reads);  // decoding may have flagged some as ordinary plates
     status('Arranging plates...');
     // One entry per distinct plate, shuffled so each run gets a different mix to choose from.
     // Capped at 80 so a big photo set still fits in what the model can take in at once.
@@ -380,11 +463,24 @@ async function showPoem(title, picks) {
   $('text').textContent = picks.map(p => (p.words ? p.words + ' ' : '') + plates[p.file].reads).join(' ');
 }
 
-function setBusy(b) { ['readBtn','rereadBtn','writeBtn'].forEach(id => $(id).disabled = b); }
+function setBusy(b) { ['readBtn','rereadBtn','redoBtn','writeBtn'].forEach(id => $(id).disabled = b); }
+
+// Throw away the decoded meanings (except ones typed in by hand) and work them all out again.
+async function redoMeanings() {
+  for (const n of images) if (plates[n] && !plates[n].readsEdited) { delete plates[n].reads; delete plates[n].vanity; }
+  setBusy(true);
+  try {
+    // Decode everything that has a plate, so ordinary plates can be flagged before poems are written.
+    await decodePlates(images.filter(n => plates[n] && plates[n].hasPlate !== false && plates[n].plate));
+    status(`Done. ${$('summary').textContent}`);
+  } catch (e) { status('Problem working out meanings: ' + e.message, true); }
+  setBusy(false);
+}
 
 $('readBtn').onclick = () => readPlates(false);
 $('rereadBtn').onclick = () => { if (confirm('Read every photo again from scratch?')) readPlates(true); };
 $('writeBtn').onclick = write;
+$('redoBtn').onclick = () => { if (confirm('Work out every meaning again? Meanings you typed in yourself are kept.')) redoMeanings(); };
 init();
 </script>
 </body>
