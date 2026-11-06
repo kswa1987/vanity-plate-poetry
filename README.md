@@ -2,10 +2,14 @@
 
 A bare-bones version that runs entirely on one Windows PC, to prove the AI steps work before building the full site.
 
-1. **Read:** a vision model (Qwen3-VL) reads the text off each plate photo and finds where the plate is,
-   so the page can crop each photo down to just the plate.
-2. **Decode:** a writing model (Gemma 3) works out what each plate says in plain words (LIV2FSH = "live to fish").
-3. **Write:** Gemma picks at least 5 plates and puts them in order so the plates, shown one after another,
+1. **Check:** before any AI runs, every photo gets two fingerprints. Exact copies (same file) and near copies
+   (the same picture resized or re-sent through a chat app) are set aside, so they're never read.
+2. **Read:** a vision model (Qwen3-VL) decides whether the photo shows a readable plate at all, reads its text,
+   and finds where the plate is, so the page can crop each photo down to just the plate. Photos with no plate
+   (screenshots, memes, scenery) are set aside. When the same plate shows up in several photos, only the one
+   where the plate is biggest (usually the clearest) is kept.
+3. **Decode:** a writing model (Gemma 3) works out what each plate says in plain words (LIV2FSH = "live to fish").
+4. **Write:** Gemma picks at least 5 plates and puts them in order so the plates, shown one after another,
    read as a poem or sentence, like magnetic poetry. It may add at most 2 small connecting words
    ("and", "of my") between plates, and nothing else.
 
@@ -27,7 +31,8 @@ any connecting words between them, and the plain-text reading underneath.
    in the repo.
 3. Double-click **Start Plate Poems.bat**. It starts a tiny local web server (`server.ps1`) at
    http://localhost:8765 and opens the page.
-4. Press **Read plates**, check the readings in the table (you can type over any of them), then press **Write**.
+4. Press **Check & read photos**, look over the table (you can type over any reading, and tick or untick
+   "Use" to override what was set aside), then press **Write**.
 
 Readings are saved to `plates.json`, so photos are only read once. Tested on an RTX 5080 (16 GB), where reading takes about a second per plate.
 
@@ -42,5 +47,7 @@ It only needs the PowerShell that comes with Windows.
 - Poems still don't make much sense ("Danger of Fear God and ATX King to Live 2 Fish but Str Girl Welcome").
   More plates and a stronger writer model should help.
 - Some decoded meanings are wrong. Fix them in the "What it means" column.
+- Two photos of the same plate only count as the same plate if Qwen reads them identically (ignoring spaces
+  and symbols). A one-letter misread lets a repeat slip through. Fixing the reading in the table catches it.
 # Vanity Plate Poetry
 The project: a website that turns photos of vanity license plates into sentences and poems. You upload or pick plate photos, each plate is read as words (e.g. "GR8 DAY" → "great day"), and the plates get arranged into a sentence or poem. It's an art piece, so the visual design matters.
