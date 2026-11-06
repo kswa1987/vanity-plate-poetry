@@ -4,16 +4,27 @@
 <meta charset="utf-8">
 <title>Plate Poems</title>
 <style>
-  body { background:#fff; color:#000; font-family:"Times New Roman", Times, serif; margin:8px 16px; }
-  h1 { text-align:center; margin:12px 0 4px; }
+  /* "A copy of a copy of a copy": off-white paper with a little toner grain, slightly smudged black type, and
+     lineup plates that look photocopied a few times over. The review tables stay plain and readable. */
+  body { color:#1c1c1c; font-family:"Times New Roman", Times, serif; margin:8px 16px;
+    background-color:#efece4;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 .09 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+  h1 { text-align:center; margin:14px 0 4px; font-size:40px; letter-spacing:2px; transform:rotate(-0.4deg);
+    text-shadow:0 0 1px #000, 0.5px 0.5px 1.5px rgba(0,0,0,.45); }
   .center { text-align:center; }
   #status { color:#555; font-size:14px; }
-  #status.err { color:#c00; }
-  #poemTitle { text-align:center; font-style:italic; margin:16px 0 8px; }
-  #line { white-space:nowrap; overflow-x:auto; text-align:center; padding:8px 0; }
-  #line img { height:90px; vertical-align:middle; border:1px solid #000; }
-  #line .w { font-size:22px; vertical-align:middle; margin:0 8px; }
-  #text { text-align:center; font-size:20px; margin:8px 0 16px; }
+  #status.err { color:#a00; }
+  .lineup { margin:14px 0 22px; padding:8px 0; }
+  .line { white-space:nowrap; overflow-x:auto; text-align:center; padding:8px 0; }
+  .line img { height:90px; vertical-align:middle; margin:0 2px; }
+  .line .w, .text { text-shadow:0 0 1px rgba(0,0,0,.6); }
+  .line .w { font-size:22px; vertical-align:middle; margin:0 8px; }
+  .text { text-align:center; font-size:20px; margin:4px 8px; }
+  .why { text-align:center; font-size:13px; color:#666; font-style:italic; }
+  table, input, button { background-color:#fff; }
+  #help { margin:0 auto 16px; }
+  #help td img { height:60px; }
+  #help .reason { color:#a00; }
   table { border-collapse:collapse; margin:auto; }
   td, th { border:1px solid #999; padding:3px 6px; font-size:14px; }
   td img { height:40px; display:block; }
@@ -25,29 +36,36 @@
 </style>
 </head>
 <body>
-<h1>Plate Poems</h1>
+<h1 class="center">Plate Poems</h1>
 <p class="center">
   <button id="readBtn">Check &amp; read photos</button>
-  <button id="writeBtn">Write a</button>
-  <select id="mode"><option value="poem">poem</option><option value="sentence">sentence</option></select>
-  from <input id="count" type="number" min="5" max="12" value="6" style="width:40px"> plates
+  <button id="writeBtn">Line up</button>
+  <input id="count" type="number" min="5" max="12" value="5" style="width:40px"> plates
 </p>
 <p class="center" id="status">Loading...</p>
 <hr>
 
 <div id="poem" style="display:none">
-  <div id="poemTitle"></div>
-  <div id="line"></div>
-  <div id="text"></div>
+  <div id="lineups"></div>
   <hr>
 </div>
 
-<h3 class="center">The plates</h3>
+<div id="helpBox" style="display:none">
+  <h3 class="center">Needs your help (<span id="helpCount"></span>)</h3>
+  <p class="center small">The AI isn't sure about these, so they're kept out of lineups until you check them.
+    Fix what the plate says or what it means if needed, then press <b>Save &amp; Approve</b>, or <b>Exclude from Pool</b> to drop it.
+    Nothing in this list is saved until you press one of the two buttons.</p>
+  <table id="help"></table>
+  <hr>
+</div>
+
+<h3 class="center">All plates</h3>
 <p class="center small" id="summary"></p>
-<p class="center small">Fix any plate or meaning by typing over it. Untick "Use" to leave a plate out, or tick it to keep a rejected one.
+<p class="center small">Fix any plate or meaning by typing over it: it saves when you click away or press Enter.
+  A meaning you type here counts as approved. Untick "Use" to leave a plate out, or tick it to keep a rejected one.
   Reader: <input id="readerModel" value="qwen3-vl:8b-instruct" size="18">
   Decoder: <input id="decoderModel" value="gpt-oss:20b" size="12">
-  Writer: <input id="writerModel" value="gemma3:12b" size="12"></p>
+  Writer: <input id="writerModel" value="gpt-oss:20b" size="12"></p>
 <table id="table"><tr><th>Use</th><th>Plate</th><th>Says</th><th>What it means</th><th>Status</th><th>Photo</th></tr></table>
 <p class="center small"><button id="redoBtn">Work out meanings again</button> <button id="rereadBtn">Re-read every photo</button></p>
 
@@ -69,7 +87,7 @@ async function init() {
   try { plates = await (await fetch('/plates.json', { cache:'no-store' })).json(); } catch { plates = {}; }
   await renderTable();
   const todo = images.filter(n => !plates[n] || !plates[n].sha || !isRead(n)).length;
-  status(`${images.length} photos found.` + (todo ? ` ${todo} still need checking: press "Check & read photos".` : ' Press "Write" to make something.'));
+  status(`${images.length} photos found.` + (todo ? ` ${todo} still need checking: press "Check & read photos".` : ' Press "Line up" to make something.'));
   try { await fetch(OLLAMA + '/api/tags'); } catch { status('Cannot reach Ollama. Make sure the Ollama app is running.', true); }
 }
 
@@ -127,6 +145,9 @@ async function fingerprint(name) {
 const hamming = (a, b) => { let d = 0; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++; return d; };
 const SIMILAR = 6;   // dhash bits that may differ for two photos to count as the same picture
 const norm = s => (s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+// Standard state-issued formats (ABC-1234, AB 123, 123-ABC, 1ABC234). The decoder is asked too, but it
+// doesn't reliably say so, and these are easy to spot by shape.
+const looksIssued = s => /^([A-Z]{2,3}\d{3,4}|\d{3}[A-Z]{3}|\d[A-Z]{3}\d{3})$/.test(norm(s));
 
 // Decide which photos to set aside, and why. Runs fresh each time, so fixing a plate re-sorts everything.
 function classify() {
@@ -141,7 +162,7 @@ function classify() {
     kept.push(name);
     if (!('hasPlate' in p) && !p.box) { status[name] = { ok:true, why:'not read yet' }; continue; }
     if (p.hasPlate === false || !norm(p.plate)) { status[name] = { ok:false, why:'no plate found' }; continue; }
-    if (p.vanity === false) { status[name] = { ok:false, why:'ordinary plate (not personalized)' }; continue; }
+    if ((p.vanity === false || looksIssued(p.plate)) && !p.reviewed) { status[name] = { ok:false, why:'ordinary plate (not personalized)' }; continue; }
     (byPlate[norm(p.plate)] ||= []).push(name);
     status[name] = { ok:true, why:'' };
   }
@@ -160,6 +181,74 @@ function classify() {
   return status;
 }
 const usable = () => { const s = classify(); return images.filter(n => s[n].use && plates[n] && plates[n].plate); };
+
+// A meaning that is mostly stray single letters or long numbers ("E L T L B R D") is a failed decode.
+const clearish = r => {
+  const w = (r || '').trim().split(/\s+/).filter(Boolean);
+  return w.length > 0 && w.filter(x => x.replace(/\W/g, '').length === 1 && !/^(a|i)$/i.test(x)).length < 2 && !/\d{3,}/.test(r);
+};
+
+// Why the AI might be wrong about a plate. Empty means it's confident (or a person already checked it).
+function helpReasons(n) {
+  const p = plates[n];
+  if (!p || p.reviewed || !p.reads) return [];
+  const why = [];
+  if (p.sticker === 'sticker') why.push('looks like a sticker, not a plate');
+  if (p.sticker === 'unsure') why.push('might be a sticker, not a plate');
+  if (p.firstRead && norm(p.firstRead) !== norm(p.plate)) why.push(`two reads disagreed (${p.firstRead} / ${p.plate})`);
+  if (p.confidence === 'low') why.push('unsure what it means');
+  if (!clearish(p.reads)) why.push("meaning doesn't look like real words");
+  return why;
+}
+const needsHelp = () => { const s = classify(); return images.filter(n => s[n].use && helpReasons(n).length); };
+// Most useful questions first: possible stickers, then meanings that are gibberish, then guesses, then misreads.
+const helpRank = n => {
+  const p = plates[n];
+  return (p.sticker === 'unsure' || p.sticker === 'sticker' ? 0 : 8) + (!clearish(p.reads) ? 0 : 4) + (p.confidence === 'low' ? 0 : 2) - helpReasons(n).length / 10;
+};
+const HELP_PAGE = 25;  // ask about a manageable handful at a time; the next ones show up as these get answered
+
+async function renderHelp() {
+  const all = needsHelp().sort((a, b) => helpRank(a) - helpRank(b));
+  const list = all.slice(0, HELP_PAGE);
+  $('helpBox').style.display = list.length ? 'block' : 'none';
+  $('helpCount').textContent = all.length > list.length ? `showing ${list.length} of ${all.length}` : all.length;
+  const table = $('help');
+  table.innerHTML = '<tr><th>Plate</th><th>Says</th><th>What it means</th><th>Why it asked</th><th></th></tr>';
+  for (const name of list) {
+    const p = plates[name];
+    const row = table.insertRow();
+    row.innerHTML = `<td><img></td><td><input class="plate"></td><td><input class="reads"></td>` +
+      `<td class="small reason"></td><td><button class="ok">Save &amp; Approve</button> <button class="drop">Exclude from Pool</button></td>`;
+    row.querySelector('img').src = await crop(name).catch(() => '');
+    row.querySelector('.plate').value = p.plate || '';
+    row.querySelector('.reads').value = p.reads || '';
+    row.cells[3].textContent = helpReasons(name).join('; ');
+    // Nothing here is saved until a button is pressed. "Save & approve" keeps whatever is in the two boxes
+    // (edited or not) and lets the plate into lineups; "Exclude" leaves it out for good.
+    row.querySelector('.ok').onclick = async () => {
+      const plate = row.querySelector('.plate').value.trim().toUpperCase();
+      const reads = row.querySelector('.reads').value.trim();
+      if (!plate || !reads) return alert('Fill in both what the plate says and what it means, or press Exclude from Pool.');
+      if (plate !== p.plate) Object.assign(p, { plate, hasPlate: true, checked: true, firstRead: undefined });
+      if (reads !== p.reads) p.readsEdited = true;
+      Object.assign(p, { reads, reviewed: true, vanity: true, sticker: 'plate' });
+      await save(); await renderTable();
+      status(`Saved ${plate} = "${reads}". It can now be used in lineups.`);
+    };
+    row.querySelector('.drop').onclick = async () => {
+      Object.assign(p, { use: false, reviewed: true });
+      await save(); await renderTable();
+      status(`Excluded ${p.plate}. Tick "Use" in the full list to bring it back.`);
+    };
+  }
+}
+
+// Brief "Saved" note next to a box in the full list, so it's clear the edit stuck.
+function flashSaved(input) {
+  const note = document.createElement('span'); note.className = 'small'; note.textContent = ' saved';
+  input.after(note); setTimeout(() => note.remove(), 2000);
+}
 
 async function renderTable() {
   const table = $('table');
@@ -188,19 +277,24 @@ async function renderTable() {
       save(); renderTable();
     };
     row.querySelector('.plate').onchange = e => {
-      plates[name] = { ...p, plate: e.target.value.trim().toUpperCase(), hasPlate: !!e.target.value.trim(), checked: true, reads: undefined };
+      // In the full list, edits save as soon as you leave the box (or press Enter).
+      plates[name] = { ...p, plate: e.target.value.trim().toUpperCase(), hasPlate: !!e.target.value.trim(), checked: true,
+        firstRead: undefined, reads: undefined, readsEdited: false, vanity: undefined };
       save(); renderTable();
+      status(`Saved ${plates[name].plate}. Its meaning will be worked out again next time you press "Line up".`);
     };
-    row.querySelector('.reads').onchange = e => {
+    row.querySelector('.reads').onchange = async e => {
       if (!plates[name]) return;
       plates[name].reads = e.target.value.trim() || undefined;
       plates[name].readsEdited = !!plates[name].reads;
-      save();
+      plates[name].reviewed = plates[name].readsEdited;
+      await save(); flashSaved(e.target); renderHelp();
     };
   }
   const using = images.filter(n => status[n].use).length;
   $('summary').textContent = `${images.length} photos: using ${using}. ` +
     Object.entries(counts).filter(([k]) => k !== 'ok').map(([k, v]) => `${v} ${k}`).join(', ');
+  await renderHelp();
 }
 
 // Shrink a photo to a JPEG the vision model can handle quickly.
@@ -246,11 +340,38 @@ async function plateCloseup(name) {
   return c.toDataURL('image/jpeg', 0.92).split(',')[1];
 }
 
+// Bumper stickers, decals and window lettering can look like plates. Look at the close-up again and ask
+// specifically: is this a real government-issued plate? "sticker" sets it aside, "unsure" asks a person.
+async function stickerCheck(name) {
+  const p = plates[name];
+  const out = await ollamaJSON($('readerModel').value, [{
+    role:'user',
+    content:'Look at this close-up. Is the text on a real government-issued vehicle license plate, or on something else ' +
+      'such as a bumper sticker, decal, window lettering, a magnet, a novelty or front souvenir plate, a dealer frame, or a sign? ' +
+      'A real plate is a stiff rectangle (about 12 by 6 inches in the US) mounted in the plate spot on a car, usually with a ' +
+      'state or country name, bolt holes or a frame, registration stickers, and a standard plate layout. ' +
+      'A sticker is usually thin, glued onto the paint or glass, often a different shape, and may have flags, logos, or slogans. ' +
+      'In "evidence" list what you see, and say whether a state or country name is printed on it. ' +
+      'Then answer "plate", "sticker", or "unsure".',
+    images:[await plateCloseup(name)]
+  }], { type:'object', properties:{
+      evidence:{type:'string', maxLength:300},
+      shows_state_or_country_name:{type:'boolean'},
+      answer:{type:'string', enum:['plate','sticker','unsure']} },
+    required:['evidence','shows_state_or_country_name','answer'] }, { temperature:0, num_predict:600 })
+    .catch(() => ({ answer:'unsure' }));
+  // On its own, Qwen called many real (dark or dirty) plates stickers. A printed state name is strong evidence of a
+  // real plate, so that overrides it, and even a "sticker" verdict only gets asked about, never thrown out silently.
+  p.sticker = out.shows_state_or_country_name ? 'plate' : out.answer;
+  await save();
+}
+
 // Second opinion: read the plate again from the close-up. If the two reads disagree, show Qwen both and have it
 // compare them character by character against the close-up. In testing this roughly halved the misreads.
 async function doubleCheck(name) {
   const p = plates[name];
-  if (p.hasPlate && p.box) {
+  if (p.hasPlate && p.box && !('sticker' in p)) await stickerCheck(name);
+  if (p.hasPlate && p.box && !p.checked) {
     const closeup = await plateCloseup(name);
     const second = (await ollamaJSON($('readerModel').value, [{
       role:'user',
@@ -294,7 +415,7 @@ async function readPlates(all) {
   }
   if (unchecked.length) await save();
   const status0 = classify();
-  const needsCheck = n => plates[n].hasPlate !== false && !plates[n].checked;
+  const needsCheck = n => plates[n].hasPlate !== false && plates[n].box && (!plates[n].checked || !('sticker' in plates[n]));
   const todo = images.filter(n => !/copy/.test(status0[n].why) && (all || !isRead(n) || needsCheck(n)));
   if (!todo.length) { setBusy(false); await renderTable(); return status('Every photo is already checked and read.'); }
   i = 0;
@@ -307,6 +428,7 @@ async function readPlates(all) {
         role:'user',
         content:'First decide whether this photo shows a real vehicle license plate you can read (has_plate). ' +
           'Screenshots, memes, chat images, people, food, scenery, and photos where no plate is readable are has_plate false. ' +
+          'So are bumper stickers, decals, and window lettering, even if they look like plate text: only a real government-issued plate counts. ' +
           'If there is a plate (probably a personalized vanity plate), read its large main characters exactly as written ' +
           '(letters, numbers, and any spaces or symbols that are part of it). ' +
           'Ignore the state name, slogans, dealer frames, and registration stickers. ' +
@@ -329,14 +451,15 @@ async function readPlates(all) {
   }
   await renderTable();
   setBusy(false);
-  status(`Done. Read ${todo.length} photos. ${$('summary').textContent} Check them over below, then press "Write".`);
+  status(`Done. Read ${todo.length} photos. ${$('summary').textContent} Check them over below, then press "Line up".`);
 }
 
 const decodeSchema = {
   type:'object',
   properties: { readings:{ type:'array', items:{ type:'object',
-    properties:{ plate:{type:'string'}, is_vanity:{type:'boolean'}, reads_as:{type:'string'} },
-    required:['plate','is_vanity','reads_as'] } } },
+    properties:{ plate:{type:'string'}, is_vanity:{type:'boolean'}, reads_as:{type:'string'},
+      confidence:{type:'string', enum:['high','medium','low']} },
+    required:['plate','is_vanity','reads_as','confidence'] } } },
   required:['readings']
 };
 
@@ -344,15 +467,22 @@ const decodeSchema = {
 const DECODE_RULES = `For each plate, work out what the owner meant. Personalized (vanity) plates squeeze a word, phrase, joke, or reference into 7 or 8 characters, so they need decoding like a puzzle.
 
 How to decode:
+- Think of popular acronyms and slang too: GOAT = greatest of all time (IGOAT = "I'm the GOAT"), OG, MVP, BOSS.
 - Sound it out loud. Letters and numbers stand for sounds: U = you, R = are, C = see, B = be, Y = why, I = I or eye, O = oh, N = and, Q = queue, X = cross or ex, Z = s or z at the end of a word, 2 = to/too, 4 = for, 8 = ate (GR8 = great, H8 = hate, L8R = later), 1 = one/won, 0 = o, 3 = e, 5 = s, 7 = t.
+- Numbers often stand in for the letters they look like (leetspeak): 1 = I or L, 3 = E, 0 = O, 4 = A, 5 = S, 7 = T, 8 = B, 9 = G. Try reading every number as a look-alike letter too, then sound it out (L1MTL3S = "limitless", P1CK1E = "pickle", B3AST = "beast").
 - Vowels are often dropped (SKL TCHR = school teacher). A single letter can stand for a whole word (V = very, M = my or me, N = and).
-- Spaces, dashes, dots, stars and hearts are usually just spacers between words. Texas plates let owners put a decorative heart or star where a space would go, so a heart is normally NOT a word: FRST♥LDY = "first lady", MAMA♥BEAR = "mama bear". Only read a heart as "love" when the phrase needs a verb there and makes no sense without it (I♥NY = "I love New York").
+- Spaces, dashes, dots and stars are just spacers. Texas plates also allow a decorative heart, and it can go either way:
+  - A heart in the middle of one word, or joining two words that already make a phrase on their own, is just a spacer: JOY♥US = "joyous", P1K♥CHU = "Pikachu", FRST♥LDY = "first lady", MAMA♥BEAR = "mama bear".
+  - A heart between a someone and a someone or something reads as "love" or "loves": JEZUS♥U = "Jesus loves you", I♥NY = "I love New York", MOM♥S♥ME = "mom loves me".
+  - Decide by reading it both ways and keeping whichever sounds like what a person would actually put on their car.
 - Think about pop culture, internet memes and slang (OK BOOMR = "ok boomer", RIZZLER, SKIBIDI), music genres, Bible verses (JOHN 316), sports teams and schools (HOOK EM = Texas Longhorns, a number before a school is a class year), brands, and Spanish (MI CASA).
 - Think about car culture: car models and trims (GT, SRT, AMG, 911), a two-digit number after a word is often the car's model year, EVs (NO GAS), JDM, lowriders.
 - ATX = Austin, Texas. HTX = Houston. DTX = Dallas.
 - Ordinary state-issued plates are random letters and numbers with no meaning (like ABC-1234 or KLM 5521). Mark those is_vanity false.
 
-Sound each one out and consider the options before answering. Give "reads_as": the meaning in plain words as the owner intended, short and natural, like you'd say it out loud (for example "school teacher", "ok boomer", "great day"). Use the actual words, not a description of them.`;
+Sound each one out and consider the options before answering. Give "reads_as": the meaning in plain words as the owner intended, short and natural, like you'd say it out loud (for example "school teacher", "ok boomer", "great day"). Use the actual words, not a description of them.
+
+Give "confidence": "high" if you're sure what the owner meant, "medium" if it's your best of a few reasonable readings, "low" if you're guessing (an unfamiliar name, inside joke, or something you can't crack). Be honest: a person will check the low ones.`;
 
 // Step 2: work out what each plate means in plain words, once, and remember it. Five at a time keeps the
 // model's attention on each plate. Ordinary state-issued plates get flagged so they stay out of poems.
@@ -384,6 +514,7 @@ async function decodePlates(pool) {
       pool.filter(n => plates[n].plate === plate).forEach(n => {
         plates[n].reads = r.reads_as;
         plates[n].vanity = r.is_vanity;
+        plates[n].confidence = r.confidence;
       });
     });
     await save();
@@ -391,83 +522,147 @@ async function decodePlates(pool) {
   if (all.length) await renderTable();
 }
 
-const storySchema = {
+const lineupSchema = {
   type:'object',
-  properties: {
-    title:{type:'string'},
-    plates:{ type:'array', items:{ type:'object',
-      properties:{ words_before:{type:'string'}, plate:{type:'string'} },
-      required:['words_before','plate'] } }
-  },
-  required:['title','plates']
+  // minItems makes the model actually return 4 lineups; asked in words alone, gpt-oss usually stopped at 1.
+  properties: { candidates:{ type:'array', minItems:4, maxItems:4, items:{ type:'object',
+    properties:{
+      why_funny:{type:'string'},
+      items:{ type:'array', minItems:5, items:{ type:'object',
+        properties:{ words_before:{type:'string'}, id:{type:'integer'} }, required:['words_before','id'] } }
+    },
+    required:['why_funny','items'] } } },
+  required:['candidates']
 };
 
-// Step 3: Gemma picks plates and puts them in order, with at most 2 small words between them.
+// Step 3: line plates up like fridge magnets so together they read as something funny. The writer only sees
+// plates whose meaning is clear (or that a person checked), numbered so it never has to retype a plate.
+// It offers 4 lineups and all 4 are shown, so a person can pick the one that lands.
 async function write() {
   let pool = usable();
-  const count = Math.max(5, +$('count').value || 6);
+  const count = Math.max(5, +$('count').value || 5);
   if (pool.length < 5) return status('Need at least 5 usable plates first. Press "Check & read photos".', true);
   setBusy(true);
   try {
     await decodePlates(pool);
-    pool = usable().filter(n => plates[n].reads);  // decoding may have flagged some as ordinary plates
-    status('Arranging plates...');
-    // One entry per distinct plate, shuffled so each run gets a different mix to choose from.
-    // Capped at 80 so a big photo set still fits in what the model can take in at once.
-    const list = [...new Map(pool.map(n => [plates[n].plate, plates[n].reads])).entries()]
-      .sort(() => Math.random() - 0.5).slice(0, 80).map(([p, r]) => `${p} = "${r}"`);
-    const mode = $('mode').value;
-    const out = await ollamaJSON($('writerModel').value, [{
+    // Only plates the AI is sure of, or that a person approved. Anything in "Needs your help" waits.
+    pool = usable().filter(n => plates[n].reads && !helpReasons(n).length);
+    if (pool.length < count) throw new Error(`Only ${pool.length} plates have a clear meaning. Help with the ones it's unsure of below.`);
+    status('Lining up plates... (about a minute)');
+    // One photo per meaning, shuffled so each run gets a different mix, capped so it fits what the model can take in.
+    const choices = [...new Map(pool.map(n => [plates[n].reads.toLowerCase(), n])).values()]
+      .sort(() => Math.random() - 0.5).slice(0, 80);
+    const list = choices.map((n, i) => `${i + 1}. ${plates[n].reads}`).join('\n');
+    const model = $('writerModel').value;
+    const ask = () => ollamaJSON(model, [{
       role:'user',
-      content:`These are real personalized license plates people photographed, with what each one says:\n${list.join('\n')}\n\n` +
-        `Make ${mode === 'poem' ? 'a short poem' : 'one sentence'} out of these plates, shown in a row like magnetic poetry. ` +
-        `Pick exactly ${count} different plates and put them in order. The plates do most of the talking: ` +
-        `before each plate you may put "words_before", at most 2 small connecting words (like "and", "the", "to", "of my", "but"), ` +
-        `or an empty string. Use connecting words only where they really help; most plates should have none. ` +
-        `Read straight through (connecting words plus each plate's meaning), it should make a ${mode} that makes sense. ` +
-        `Give "plate" copied exactly from the list, and a short "title". Be playful and clever.`
-    }], storySchema, { temperature:0.9 });
-    // Match each chosen plate back to a photo, and hold Gemma to 2 connecting words.
-    const used = new Set();
-    const picks = out.plates.map(p => {
-      const key = p.plate.trim().toUpperCase();
-      const file = pool.find(n => !used.has(n) && plates[n].plate === key)
-        || pool.find(n => !used.has(n) && plates[n].plate.replace(/\W/g,'') === key.replace(/\W/g,''));
-      if (file) used.add(file);
-      return { file, words: (p.words_before || '').trim().split(/\s+/).filter(Boolean).slice(0, 2).join(' ') };
-    }).filter(p => p.file);
-    if (picks.length < 5) throw new Error(`The writer only used ${picks.length} real plates from the list. Try again.`);
-    await showPoem(out.title, picks);
-    status(`Made a ${mode} from ${picks.length} plates. Press "Write" again for a different one.`);
+      content:`Here are the meanings of real personalized license plates people photographed (numbered):\n${list}\n\n` +
+        `Line up ${count} of these plates in a row, like magnetic poetry on a fridge, so that together they read as something funny: ` +
+        `an absurd sentence, a weird juxtaposition, an accidental confession, a ridiculous headline, an unexpected twist at the end. ` +
+        `It does not need to rhyme or be a poem. It does need to read as a phrase a person could say out loud and get a laugh.\n\n` +
+        `Each plate keeps its words exactly. Before each plate you may add up to 3 connecting words, or none, ` +
+        `to join the plates into one flowing sentence. Make the connections do real work and vary them: ` +
+        `prepositions and phrases like "because of", "right after", "until", "instead of", "thanks to", "while", "unless", ` +
+        `"so", "who said", "is the reason", "next to", "on top of", "ever since", "which is why". ` +
+        `Use "and" or "but" at most once in a lineup. Nothing else may be added, and don't repeat a plate's own words as glue.\n\n` +
+        `Give 4 lineups, each with exactly ${count} different plates by number, and say in one line why each is funny. ` +
+        `Make the 4 really different: different plates, a different sentence shape, and different connecting words in each. ` +
+        `Don't start them all the same way.`
+    }], lineupSchema,
+      /gpt-oss/.test(model) ? { temperature:1, num_ctx:16384 } : { temperature:1, num_ctx:8192 },
+      /gpt-oss/.test(model) ? { think:'medium' } : {});
+    // Now and then gpt-oss thinks for so long that its answer gets cut off; one retry usually fixes it.
+    let out;
+    try { out = await ask(); } catch (e) { status('Lining up plates... (second try)'); out = await ask(); }
+    const lineups = out.candidates.map(c => {
+      const seen = new Set();
+      const items = c.items.filter(x => choices[x.id - 1] && !seen.has(x.id) && seen.add(x.id)).map(x => {
+        const file = choices[x.id - 1];
+        let words = (x.words_before || '').trim().split(/\s+/).filter(Boolean).slice(0, 3).join(' ');  // hold it to 3 glue words
+        // The model sometimes repeats the plate's own words as glue ("I go" + "I go"); drop that.
+        if (words && plates[file].reads.toLowerCase().startsWith(words.toLowerCase())) words = '';
+        return { file, words };
+      });
+      return { why: c.why_funny, items };
+    }).filter(l => l.items.length >= 5);
+    if (!lineups.length) throw new Error('The writer did not come up with a usable lineup. Try again.');
+    await showLineups(lineups);
+    status(`Here are ${lineups.length} lineups. Press "Line up" again for more.`);
   } catch (e) {
-    status('Problem writing: ' + e.message, true);
+    status('Problem lining up plates: ' + e.message, true);
   }
   setBusy(false);
 }
 
-async function showPoem(title, picks) {
-  $('poem').style.display = 'block';
-  $('poemTitle').textContent = title;
-  $('line').innerHTML = '';
-  for (const p of picks) {
-    if (p.words) {
-      const w = document.createElement('span'); w.className = 'w'; w.textContent = p.words;
-      $('line').appendChild(w);
+// "A copy of a copy of a copy": run the plate through an imaginary photocopier three times. Each pass drains
+// some color, pushes contrast, softens it a touch, nudges it slightly crooked, and adds toner specks; the edges
+// fade out the way they do on a worn copy. Only the plates shown in lineups get this.
+async function photocopy(src) {
+  let img = await loadImage(src);
+  const W = img.naturalWidth, H = img.naturalHeight;
+  for (let pass = 0; pass < 3; pass++) {
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#efece4'; ctx.fillRect(0, 0, W, H);
+    ctx.filter = 'grayscale(0.45) sepia(0.12) contrast(1.18) brightness(1.04) blur(0.5px)';
+    ctx.translate(W / 2, H / 2);
+    ctx.rotate((Math.random() - 0.5) * 0.012);
+    ctx.drawImage(img, -W / 2 + (Math.random() - 0.5) * 2, -H / 2 + (Math.random() - 0.5) * 2, W, H);
+    ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.filter = 'none';
+    // Toner specks.
+    for (let i = 0; i < W * H / 900; i++) {
+      ctx.fillStyle = `rgba(0,0,0,${Math.random() * 0.35})`;
+      ctx.fillRect(Math.random() * W, Math.random() * H, 1 + Math.random(), 1 + Math.random());
     }
-    const img = document.createElement('img');
-    img.src = await crop(p.file);
-    img.title = `${plates[p.file].plate}: ${plates[p.file].reads}`;
-    $('line').appendChild(img);
-    $('line').appendChild(document.createTextNode(' '));
+    // Uneven toner: a faint light streak across the page.
+    const y = Math.random() * H;
+    const streak = ctx.createLinearGradient(0, y - 10, 0, y + 10);
+    streak.addColorStop(0, 'rgba(255,255,255,0)'); streak.addColorStop(.5, 'rgba(255,255,255,.12)'); streak.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = streak; ctx.fillRect(0, y - 10, W, 20);
+    img = await loadImage(c.toDataURL('image/jpeg', 0.6));
   }
-  $('text').textContent = picks.map(p => (p.words ? p.words + ' ' : '') + plates[p.file].reads).join(' ');
+  // Worn, faded edges.
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  const fade = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.65);
+  fade.addColorStop(0, 'rgba(239,236,228,0)'); fade.addColorStop(1, 'rgba(239,236,228,.55)');
+  ctx.fillStyle = fade; ctx.fillRect(0, 0, W, H);
+  return c.toDataURL('image/jpeg', 0.7);
+}
+
+async function showLineups(lineups) {
+  $('poem').style.display = 'block';
+  $('lineups').innerHTML = '';
+  for (const l of lineups) {
+    const box = document.createElement('div'); box.className = 'lineup';
+    const line = document.createElement('div'); line.className = 'line';
+    for (const p of l.items) {
+      if (p.words) {
+        const w = document.createElement('span'); w.className = 'w'; w.textContent = p.words;
+        line.appendChild(w);
+      }
+      const img = document.createElement('img');
+      img.src = await photocopy(await crop(p.file));
+      img.title = `${plates[p.file].plate}: ${plates[p.file].reads}`;
+      line.appendChild(img);
+      line.appendChild(document.createTextNode(' '));
+    }
+    const text = document.createElement('div'); text.className = 'text';
+    text.textContent = l.items.map(p => (p.words ? p.words + ' ' : '') + plates[p.file].reads).join(' ');
+    const why = document.createElement('div'); why.className = 'why'; why.textContent = l.why;
+    box.append(line, text, why);
+    $('lineups').appendChild(box);
+  }
 }
 
 function setBusy(b) { ['readBtn','rereadBtn','redoBtn','writeBtn'].forEach(id => $(id).disabled = b); }
 
 // Throw away the decoded meanings (except ones typed in by hand) and work them all out again.
 async function redoMeanings() {
-  for (const n of images) if (plates[n] && !plates[n].readsEdited) { delete plates[n].reads; delete plates[n].vanity; }
+  for (const n of images) if (plates[n] && !plates[n].readsEdited) {
+    delete plates[n].reads; delete plates[n].vanity; delete plates[n].confidence; delete plates[n].reviewed;
+  }
   setBusy(true);
   try {
     // Decode everything that has a plate, so ordinary plates can be flagged before poems are written.
